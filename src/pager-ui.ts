@@ -148,10 +148,10 @@ export class PagerUi {
       return;
     }
     if (this.panelMode === "width") {
-      this.panel.createDiv({ cls: "pdf-pager-panel-heading", text: "页面宽度" });
+      this.panel.createDiv({ cls: "pdf-pager-panel-heading", text: "最小页面宽度" });
       const row = this.panel.createDiv("pdf-pager-width-row");
       row.createSpan({ text: "窄" });
-      const slider = row.createEl("input", { type: "range", attr: { min: "70", max: "160", step: "5", value: String(Math.round(this.factor * 100)), "aria-label": "页面显示宽度" } });
+      const slider = row.createEl("input", { type: "range", attr: { min: "70", max: "160", step: "5", value: String(Math.round(this.factor * 100)), "aria-label": "PDF 最小显示宽度" } });
       const value = row.createSpan({ text: `${Math.round(this.factor * 100)}%` });
       this.widthSlider = slider;
       this.widthLabel = value;
@@ -162,7 +162,7 @@ export class PagerUi {
       whole.addEventListener("click", () => this.actions.fit("page-fit"));
       const wide = fits.createEl("button", { text: "适合宽度" });
       wide.addEventListener("click", () => this.actions.fit("page-width"));
-      this.panel.createDiv({ cls: "pdf-pager-hint", text: "仅调整显示，不修改 PDF。捏合缩放仍可用。" });
+      this.panel.createDiv({ cls: "pdf-pager-hint", text: "以当前适配方式为 100%。可双指放大，缩小到此宽度为止；不修改 PDF。" });
     }
   }
 

@@ -7,6 +7,8 @@ export interface PdfEventBus {
 
 export interface PdfViewer {
   pdfDocument?: { numPages: number };
+  container: HTMLElement;
+  getPageView(index: number): { div: HTMLElement } | undefined;
   currentPageNumber: number;
   currentScale: number;
   currentScaleValue: string | number;

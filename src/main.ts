@@ -3,6 +3,7 @@ import { clampPage, shouldRecordPage, type Bookmark, type ReadingState } from ".
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
 import { StateStore } from "./state-store";
+import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 
@@ -49,6 +50,11 @@ class PagerSession implements PagerActions {
   private orientation = window.innerWidth >= window.innerHeight;
   private reflowPage: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private baseScale = 0;
+  private minimumScale = 0;
+  private scaleClampFrame: number | null = null;
+  private centerFrame: number | null = null;
+  private layoutRevision = 0;
   private original: { scrollMode: number; spreadMode: number; scaleValue: string | number } | null = null;
   private modeErrorShown = false;
   private settings = loadDisplaySettings();
@@ -56,7 +62,20 @@ class PagerSession implements PagerActions {
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
     const page = event.pageNumber ?? this.native?.pdfViewer.currentPageNumber;
-    if (page) this.observePage(page);
+    if (page) {
+      const changed = page !== this.page;
+      this.observePage(page);
+      if (changed) this.centerPage(page);
+    }
+  };
+  private readonly onScaleChanging = (event: { scale?: number }) => {
+    if (!this.minimumScale || !Number.isFinite(event.scale) || event.scale! >= this.minimumScale - 0.0001) return;
+    if (this.scaleClampFrame !== null) return;
+    this.scaleClampFrame = window.requestAnimationFrame(() => {
+      this.scaleClampFrame = null;
+      const pdf = this.native?.pdfViewer;
+      if (pdf && pdf.currentScale < this.minimumScale) pdf.currentScaleValue = this.minimumScale;
+    });
   };
 
   constructor(private plugin: PdfPagerPlugin, readonly view: FileView) {
@@ -87,9 +106,11 @@ class PagerSession implements PagerActions {
     if (this.native !== native) {
       this.native?.eventBus.off("pagesinit", this.onPagesInit);
       this.native?.eventBus.off("pagechanging", this.onPageChanging);
+      this.native?.eventBus.off("scalechanging", this.onScaleChanging);
       this.native = native;
       native.eventBus.on("pagesinit", this.onPagesInit);
       native.eventBus.on("pagechanging", this.onPageChanging);
+      native.eventBus.on("scalechanging", this.onScaleChanging);
     }
     this.refreshFile();
   }
@@ -114,6 +135,7 @@ class PagerSession implements PagerActions {
     this.page = Math.max(1, pdf.currentPageNumber);
     this.lastObservedPage = this.page;
     this.state = { bookmarks: [] };
+    this.baseScale = this.minimumScale = 0;
     this.ui.setFile(file.path, this.state, doc.numPages);
     this.ui.update(this.page, doc.numPages, this.state);
     this.applyMode();
@@ -134,6 +156,7 @@ class PagerSession implements PagerActions {
           pdf.currentPageNumber = clampPage(state.progress.page, this.pageCount());
         }
         this.page = pdf.currentPageNumber;
+        this.centerPage(this.page);
         this.lastObservedPage = this.page;
         this.armed = true;
         this.restoring = false;
@@ -179,17 +202,23 @@ class PagerSession implements PagerActions {
     }, 550);
   }
 
-  private applyMode(targetPage?: number): void {
+  private applyMode(targetPage?: number, preserveZoom = false): void {
     const pdf = this.native?.pdfViewer;
     if (!pdf || !pdf.pdfDocument) return;
     const page = clampPage(targetPage ?? pdf.currentPageNumber ?? this.page, this.pageCount());
+    const oldFloor = this.minimumScale;
+    const zoom = preserveZoom ? relativeZoom(pdf.currentScale, oldFloor) : 1;
+    const revision = ++this.layoutRevision;
     this.restoring = true;
+    // The intermediate fit preset may be below the old floor while it is recalculated.
+    this.minimumScale = 0;
     // Reuse the existing PDF.js viewer. Page mode keeps one PDF page mounted.
     try {
       pdf.spreadMode = NO_SPREAD;
       pdf.scrollMode = PAGE_MODE;
       pdf.currentScaleValue = this.settings.fitMode;
     } catch {
+      this.minimumScale = oldFloor;
       this.restoring = false;
       if (!this.modeErrorShown) {
         this.modeErrorShown = true;
@@ -198,12 +227,15 @@ class PagerSession implements PagerActions {
       return;
     }
     window.requestAnimationFrame(() => {
-      if (this.disposed || this.native?.pdfViewer !== pdf) return;
+      if (this.disposed || this.native?.pdfViewer !== pdf || revision !== this.layoutRevision) return;
       const base = pdf.currentScale;
-      if (Number.isFinite(base) && base > 0 && this.settings.factor !== 1) {
-        pdf.currentScaleValue = base * this.settings.factor;
+      if (Number.isFinite(base) && base > 0) {
+        this.baseScale = base;
+        this.minimumScale = base * this.settings.factor;
+        if (this.settings.factor !== 1 || zoom !== 1) pdf.currentScaleValue = this.minimumScale * zoom;
       }
       pdf.currentPageNumber = page;
+      this.centerPage(page);
       this.page = page;
       this.lastObservedPage = page;
       this.ui.update(page, this.pageCount(), this.state);
@@ -219,7 +251,7 @@ class PagerSession implements PagerActions {
       this.reflowTimer = null;
       const page = this.reflowPage;
       this.reflowPage = null;
-      if (this.native?.pdfViewer.pdfDocument) this.applyMode(page ?? undefined);
+      if (this.native?.pdfViewer.pdfDocument) this.applyMode(page ?? undefined, true);
     }, 180);
   }
 
@@ -233,6 +265,7 @@ class PagerSession implements PagerActions {
     if (this.reflowPage !== null) this.reflowPage = next;
     pdf.currentPageNumber = next;
     this.observePage(next);
+    this.centerPage(next);
   }
 
   addBookmark(): void {
@@ -260,11 +293,37 @@ class PagerSession implements PagerActions {
 
   width(factor: number): void {
     if (!Number.isFinite(factor)) return;
+    const oldFloor = this.minimumScale;
     this.settings.factor = Math.max(0.7, Math.min(1.6, factor));
     saveDisplaySettings(this.settings);
     this.ui.setFactor(this.settings.factor);
     if (this.zoomTimer !== null) window.clearTimeout(this.zoomTimer);
-    this.zoomTimer = window.setTimeout(() => { this.zoomTimer = null; this.applyMode(); }, 75);
+    this.zoomTimer = window.setTimeout(() => {
+      this.zoomTimer = null;
+      const pdf = this.native?.pdfViewer;
+      if (!pdf || !this.baseScale) { this.applyMode(); return; }
+      const floor = this.baseScale * this.settings.factor;
+      const scale = scaleForNewFloor(pdf.currentScale, oldFloor, floor);
+      this.minimumScale = floor;
+      pdf.currentScaleValue = scale;
+      this.centerPage(pdf.currentPageNumber);
+    }, 75);
+  }
+
+  private centerPage(page: number): void {
+    if (this.centerFrame !== null) window.cancelAnimationFrame(this.centerFrame);
+    this.centerFrame = window.requestAnimationFrame(() => {
+      this.centerFrame = null;
+      const pdf = this.native?.pdfViewer;
+      if (!pdf || pdf.currentPageNumber !== page) return;
+      const container = pdf.container;
+      const pageEl = pdf.getPageView?.(page - 1)?.div;
+      if (!container || !pageEl?.isConnected) return;
+      const viewport = container.getBoundingClientRect();
+      const sheet = pageEl.getBoundingClientRect();
+      const delta = (sheet.left + sheet.width / 2) - (viewport.left + viewport.width / 2);
+      container.scrollLeft = centeredScrollLeft(container.scrollLeft, container.clientWidth, delta, container.scrollWidth);
+    });
   }
 
   toggleBar(): void { this.ui.toggleBar(); }
@@ -297,6 +356,9 @@ class PagerSession implements PagerActions {
     }
     this.saveTimer = this.reflowTimer = this.restoreTimer = this.zoomTimer = null;
     this.reflowPage = null;
+    if (this.scaleClampFrame !== null) window.cancelAnimationFrame(this.scaleClampFrame);
+    if (this.centerFrame !== null) window.cancelAnimationFrame(this.centerFrame);
+    this.scaleClampFrame = this.centerFrame = null;
   }
 
   dispose(): void {
@@ -306,6 +368,7 @@ class PagerSession implements PagerActions {
     this.resizeObserver?.disconnect();
     this.native?.eventBus.off("pagesinit", this.onPagesInit);
     this.native?.eventBus.off("pagechanging", this.onPageChanging);
+    this.native?.eventBus.off("scalechanging", this.onScaleChanging);
     this.restoreOriginal();
     this.ui.destroy();
   }
