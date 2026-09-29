@@ -14,7 +14,13 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/Heptazero/obsdiain-PDF-pager/releases) 下载 `manifest.json`、`main.js` 和 `styles.css`，放入 vault 的 `.obsidian/plugins/pdf-pager-hz/`，然后在 Obsidian 的社区插件设置中启用 **PDF Pager (hz)**。更新时替换这三个文件并重新加载插件。
+### BRAT
+
+在 BRAT 中选择“添加测试版插件”，仓库地址只输入 `Heptazero/obsdiain-PDF-pager`。注意仓库名当前拼作 `obsdiain`；不要附带中文逗号、Markdown 链接格式或 `/releases/tag/0.1.0`。安装后在 Obsidian 的社区插件设置中启用 **PDF Pager (hz)**。
+
+### 手动安装
+
+从 [GitHub Releases](https://github.com/Heptazero/obsdiain-PDF-pager/releases) 下载 `manifest.json`、`main.js` 和 `styles.css`，放入 vault 的 `.obsidian/plugins/pdf-pager-hz/`，然后启用插件。更新时替换这三个文件并重新加载插件。
 
 首次公开版本尚未完成真实手机触控验收。建议先用一份熟悉的 PDF 测试横竖屏切换、双指缩放、翻页居中和续读。
 
