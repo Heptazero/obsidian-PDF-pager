@@ -1,0 +1,9 @@
+{
+  "id": "pdf-pager-hz",
+  "name": "PDF Pager (hz)",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.8",
+  "description": "Page-by-page reading, resume position, bookmarks, and margin control in Obsidian's native PDF viewer.",
+  "author": "heptazero",
+  "isDesktopOnly": false
+}

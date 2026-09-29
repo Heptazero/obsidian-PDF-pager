@@ -1,0 +1,153 @@
+.pdf-pager-host {
+  position: relative;
+}
+
+.pdf-pager-bar {
+  position: absolute;
+  z-index: 45;
+  left: 50%;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 16px);
+  padding: 4px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 14px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+  opacity: .96;
+}
+
+.pdf-pager-bar.is-hidden,
+.pdf-pager-panel[hidden] {
+  display: none;
+}
+
+.pdf-pager-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-normal);
+  touch-action: manipulation;
+}
+
+.pdf-pager-button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.pdf-pager-button:disabled {
+  opacity: .35;
+}
+
+.pdf-pager-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-ui-small);
+}
+
+.pdf-pager-readout input {
+  width: 3.3em;
+  min-width: 0;
+  padding: 3px 2px;
+  text-align: center;
+  font: inherit;
+  appearance: textfield;
+}
+
+.pdf-pager-readout input::-webkit-inner-spin-button,
+.pdf-pager-readout input::-webkit-outer-spin-button {
+  appearance: none;
+}
+
+.pdf-pager-progress {
+  margin-left: 5px;
+  color: var(--text-muted);
+}
+
+.pdf-pager-panel {
+  position: absolute;
+  z-index: 46;
+  right: 8px;
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 54px);
+  width: min(320px, calc(100% - 16px));
+  max-height: min(55vh, 360px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-l);
+  color: var(--text-normal);
+}
+
+.pdf-pager-panel-heading,
+.pdf-pager-bookmark-row,
+.pdf-pager-width-row,
+.pdf-pager-fit-buttons,
+.pdf-pager-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdf-pager-panel-heading {
+  justify-content: space-between;
+  font-weight: var(--font-semibold);
+  margin-bottom: 8px;
+}
+
+.pdf-pager-empty,
+.pdf-pager-hint {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  padding: 4px 0;
+}
+
+.pdf-pager-bookmark-row {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.pdf-pager-bookmark-jump {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text-normal);
+  min-height: 40px;
+}
+
+.pdf-pager-width-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-pager-fit-buttons {
+  margin-top: 12px;
+}
+
+.pdf-pager-fit-buttons button {
+  flex: 1;
+}
+
+.pdf-pager-confirm-actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+@media (max-width: 420px) {
+  .pdf-pager-bar { padding: 3px; }
+  .pdf-pager-button { width: 35px; height: 40px; }
+  .pdf-pager-progress { display: none; }
+}
