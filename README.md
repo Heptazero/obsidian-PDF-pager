@@ -12,4 +12,10 @@
 
 本插件使用 Obsidian 未公开的 PDF.js 阅读器接口。Obsidian 更新后，如单页模式或页码获取失效，需要调整 `src/native-viewer.ts`。
 
+## 安装
+
+从 [GitHub Releases](https://github.com/Heptazero/obsdiain-PDF-pager/releases) 下载 `manifest.json`、`main.js` 和 `styles.css`，放入 vault 的 `.obsidian/plugins/pdf-pager-hz/`，然后在 Obsidian 的社区插件设置中启用 **PDF Pager (hz)**。更新时替换这三个文件并重新加载插件。
+
+首次公开版本尚未完成真实手机触控验收。建议先用一份熟悉的 PDF 测试横竖屏切换、双指缩放、翻页居中和续读。
+
 开发：`npm install && npm test && npm run build`。
