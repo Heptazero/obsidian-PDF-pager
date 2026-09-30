@@ -49,6 +49,8 @@ export class PagerUi {
   private path = "";
   private panelMode: "bookmarks" | "width" | null = null;
   private factor = 1;
+  private sliceIndex = 0;
+  private sliceCount = 1;
   private widthSlider: HTMLInputElement | null = null;
   private widthLabel: HTMLSpanElement | null = null;
 
@@ -56,6 +58,8 @@ export class PagerUi {
     view.containerEl.addClass("pdf-pager-host");
     this.bar = view.containerEl.createDiv("pdf-pager-bar");
     this.bar.addEventListener("pointerdown", (event) => event.stopPropagation());
+    this.bar.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
+    this.bar.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
     this.bar.addEventListener("keydown", (event) => event.stopPropagation());
     this.prev = button(this.bar, "chevron-left", "上一页", () => actions.previous());
     const readout = this.bar.createDiv("pdf-pager-readout");
@@ -70,6 +74,8 @@ export class PagerUi {
     this.panel = view.containerEl.createDiv("pdf-pager-panel");
     this.panel.hidden = true;
     this.panel.addEventListener("pointerdown", (event) => event.stopPropagation());
+    this.panel.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
+    this.panel.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
     this.panel.addEventListener("click", (event) => event.stopPropagation());
     this.panel.addEventListener("keydown", (event) => event.stopPropagation());
     this.headerAction = view.addAction("book-open", "显示或隐藏 PDF 翻页控制", () => this.toggleBar());
@@ -80,8 +86,11 @@ export class PagerUi {
     this.path = path;
     this.state = state;
     this.pageCount = Math.max(1, pageCount);
+    this.sliceIndex = 0;
+    this.sliceCount = 1;
     this.panelMode = null;
     this.panel.hidden = true;
+    this.panel.classList.remove("pdf-pager-panel-width");
     this.render();
   }
 
@@ -98,6 +107,12 @@ export class PagerUi {
     if (this.widthLabel) this.widthLabel.textContent = `${Math.round(factor * 100)}%`;
   }
 
+  setSlice(index: number, count: number): void {
+    this.sliceCount = Math.max(1, count);
+    this.sliceIndex = Math.max(0, Math.min(this.sliceCount - 1, index));
+    this.render();
+  }
+
   toggleBar(): void {
     this.bar.classList.toggle("is-hidden");
     if (this.bar.classList.contains("is-hidden")) {
@@ -109,6 +124,7 @@ export class PagerUi {
   private togglePanel(mode: "bookmarks" | "width"): void {
     this.panelMode = this.panelMode === mode ? null : mode;
     this.panel.hidden = this.panelMode === null;
+    this.panel.classList.toggle("pdf-pager-panel-width", this.panelMode === "width");
     this.renderPanel();
   }
 
@@ -116,9 +132,14 @@ export class PagerUi {
     this.pageInput.value = String(this.page);
     this.pageInput.max = String(this.pageCount);
     this.total.textContent = `/${this.pageCount}`;
-    this.progress.textContent = `${Math.round((this.page / this.pageCount) * 100)}%`;
-    this.prev.disabled = this.page <= 1;
-    this.next.disabled = this.page >= this.pageCount;
+    const percent = Math.round((this.page / this.pageCount) * 100);
+    this.progress.textContent = this.sliceCount > 1
+      ? `${percent}% · ${this.sliceIndex + 1}/${this.sliceCount} 屏`
+      : `${percent}%`;
+    this.prev.disabled = this.page <= 1 && this.sliceIndex === 0;
+    this.next.disabled = this.page >= this.pageCount && this.sliceIndex >= this.sliceCount - 1;
+    this.prev.setAttribute("aria-label", this.sliceCount > 1 ? "上一屏" : "上一页");
+    this.next.setAttribute("aria-label", this.sliceCount > 1 ? "下一屏" : "下一页");
     const already = this.state.bookmarks.some((item) => item.page === this.page);
     this.bookmark.disabled = already;
     this.bookmark.setAttribute("aria-label", already ? "当前页已有书签" : "给当前页加书签");
@@ -155,6 +176,11 @@ export class PagerUi {
       const value = row.createSpan({ text: `${Math.round(this.factor * 100)}%` });
       this.widthSlider = slider;
       this.widthLabel = value;
+      row.addEventListener("pointerdown", (event) => event.stopPropagation());
+      row.addEventListener("pointermove", (event) => event.stopPropagation());
+      row.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
+      row.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
+      slider.addEventListener("pointermove", (event) => event.stopPropagation());
       slider.addEventListener("input", () => { value.textContent = `${slider.value}%`; this.actions.width(Number(slider.value) / 100); });
       row.createSpan({ text: "宽" });
       const fits = this.panel.createDiv("pdf-pager-fit-buttons");

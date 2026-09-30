@@ -110,8 +110,8 @@ export class StateStore {
     });
   }
 
-  recordProgress(pdfPath: string, page: number): Promise<ReadingState> {
-    return this.edit(pdfPath, (record, now) => { record.progress = { page, updatedAt: now }; });
+  recordProgress(pdfPath: string, page: number, position = 0): Promise<ReadingState> {
+    return this.edit(pdfPath, (record, now) => { record.progress = { page, position, updatedAt: now }; });
   }
 
   addBookmark(pdfPath: string, page: number): Promise<ReadingState> {

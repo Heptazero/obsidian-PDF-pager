@@ -1,5 +1,7 @@
 export interface Progress {
   page: number;
+  /** Relative vertical reading location within a PDF page (0–1). */
+  position?: number;
   updatedAt: number;
 }
 
@@ -68,4 +70,12 @@ export function shouldRecordPage(
   lastPage: number
 ): boolean {
   return focused && !restoring && armed && Number.isInteger(page) && page > 0 && page !== lastPage;
+}
+
+export function shouldRecordLocation(
+  focused: boolean, restoring: boolean, armed: boolean,
+  page: number, lastPage: number, position: number, lastPosition: number,
+): boolean {
+  return focused && !restoring && armed && Number.isInteger(page) && page > 0
+    && (page !== lastPage || Math.abs(position - lastPosition) > 0.001);
 }

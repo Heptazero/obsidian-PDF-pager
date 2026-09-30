@@ -19,6 +19,7 @@
   box-shadow: var(--shadow-s);
   color: var(--text-normal);
   opacity: .96;
+  touch-action: manipulation;
 }
 
 .pdf-pager-bar.is-hidden,
@@ -84,6 +85,7 @@
   width: min(320px, calc(100% - 16px));
   max-height: min(55vh, 360px);
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 12px;
@@ -131,6 +133,20 @@
 .pdf-pager-width-row input {
   flex: 1;
   min-width: 0;
+  touch-action: none;
+}
+
+.pdf-pager-panel-width,
+.pdf-pager-panel-width .pdf-pager-width-row {
+  touch-action: none;
+}
+
+@media (pointer: coarse) {
+  .pdf-pager-panel {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
 }
 
 .pdf-pager-fit-buttons {

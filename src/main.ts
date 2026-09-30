@@ -1,26 +1,32 @@
-import { FileView, Notice, Plugin, TFile, TFolder } from "obsidian";
-import { clampPage, shouldRecordPage, type Bookmark, type ReadingState } from "./reading-state";
+import { FileView, Notice, Platform, Plugin, TFile, TFolder } from "obsidian";
+import { clampPage, shouldRecordLocation, type Bookmark, type ReadingState } from "./reading-state";
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
 import { StateStore } from "./state-store";
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
+import { clampPosition, positionFromScroll, scrollTopForPosition, sliceCount, sliceIndex, slicePosition } from "./slices";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 
 interface DisplaySettings {
-  fitMode: "page-fit" | "page-width";
+  version: 2;
+  fitMode: "auto" | "page-fit" | "page-width";
   factor: number;
 }
 
 function loadDisplaySettings(): DisplaySettings {
   try {
     const value = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "null") as Partial<DisplaySettings> | null;
+    const fitMode = value?.version === 2
+      ? value.fitMode === "page-fit" || value.fitMode === "page-width" ? value.fitMode : "auto"
+      : value?.fitMode === "page-width" ? "page-width" : "auto";
     return {
-      fitMode: value?.fitMode === "page-width" ? "page-width" : "page-fit",
+      version: 2,
+      fitMode,
       factor: typeof value?.factor === "number" && value.factor >= 0.7 && value.factor <= 1.6 ? value.factor : 1,
     };
   } catch {
-    return { fitMode: "page-fit", factor: 1 };
+    return { version: 2, fitMode: "auto", factor: 1 };
   }
 }
 
@@ -35,7 +41,10 @@ class PagerSession implements PagerActions {
   private document: unknown = null;
   private state: ReadingState = { bookmarks: [] };
   private page = 1;
+  private position = 0;
   private lastObservedPage = 1;
+  private lastObservedPosition = 0;
+  private requestedPosition: number | null = null;
   private armed = false;
   private restoring = false;
   private generation = 0;
@@ -54,6 +63,7 @@ class PagerSession implements PagerActions {
   private minimumScale = 0;
   private scaleClampFrame: number | null = null;
   private centerFrame: number | null = null;
+  private sliceFrame: number | null = null;
   private layoutRevision = 0;
   private original: { scrollMode: number; spreadMode: number; scaleValue: string | number } | null = null;
   private modeErrorShown = false;
@@ -64,11 +74,14 @@ class PagerSession implements PagerActions {
     const page = event.pageNumber ?? this.native?.pdfViewer.currentPageNumber;
     if (page) {
       const changed = page !== this.page;
-      this.observePage(page);
-      if (changed) this.centerPage(page);
+      const position = this.requestedPosition ?? (changed ? page < this.page ? 1 : 0 : this.position);
+      this.requestedPosition = null;
+      this.observeLocation(page, position);
+      if (changed) this.placePage(page, position);
     }
   };
   private readonly onScaleChanging = (event: { scale?: number }) => {
+    this.scheduleSliceReadout();
     if (!this.minimumScale || !Number.isFinite(event.scale) || event.scale! >= this.minimumScale - 0.0001) return;
     if (this.scaleClampFrame !== null) return;
     this.scaleClampFrame = window.requestAnimationFrame(() => {
@@ -77,6 +90,7 @@ class PagerSession implements PagerActions {
       if (pdf && pdf.currentScale < this.minimumScale) pdf.currentScaleValue = this.minimumScale;
     });
   };
+  private readonly onContainerScroll = () => this.scheduleSliceReadout();
 
   constructor(private plugin: PdfPagerPlugin, readonly view: FileView) {
     this.ui = new PagerUi(plugin.app, view, this);
@@ -104,10 +118,12 @@ class PagerSession implements PagerActions {
     if (this.attachTimer !== null) window.clearTimeout(this.attachTimer);
     this.attachTimer = null;
     if (this.native !== native) {
+      this.native?.pdfViewer.container.removeEventListener("scroll", this.onContainerScroll);
       this.native?.eventBus.off("pagesinit", this.onPagesInit);
       this.native?.eventBus.off("pagechanging", this.onPageChanging);
       this.native?.eventBus.off("scalechanging", this.onScaleChanging);
       this.native = native;
+      native.pdfViewer.container.addEventListener("scroll", this.onContainerScroll, { passive: true });
       native.eventBus.on("pagesinit", this.onPagesInit);
       native.eventBus.on("pagechanging", this.onPageChanging);
       native.eventBus.on("scalechanging", this.onScaleChanging);
@@ -133,7 +149,10 @@ class PagerSession implements PagerActions {
     this.clearTimers();
     const generation = ++this.generation;
     this.page = Math.max(1, pdf.currentPageNumber);
+    this.position = 0;
     this.lastObservedPage = this.page;
+    this.lastObservedPosition = 0;
+    this.requestedPosition = null;
     this.state = { bookmarks: [] };
     this.baseScale = this.minimumScale = 0;
     this.ui.setFile(file.path, this.state, doc.numPages);
@@ -154,10 +173,12 @@ class PagerSession implements PagerActions {
         // Obsidian applies #page links asynchronously. Let explicit navigation win.
         if (!hasExplicitPageTarget(this.view) && pdf.currentPageNumber === 1 && this.lastObservedPage === 1 && state.progress) {
           pdf.currentPageNumber = clampPage(state.progress.page, this.pageCount());
+          this.position = clampPosition(state.progress.position);
         }
         this.page = pdf.currentPageNumber;
-        this.centerPage(this.page);
+        this.placePage(this.page);
         this.lastObservedPage = this.page;
+        this.lastObservedPosition = this.position;
         this.armed = true;
         this.restoring = false;
         this.ui.update(this.page, this.pageCount(), this.state);
@@ -177,26 +198,42 @@ class PagerSession implements PagerActions {
     return this.native?.pdfViewer.pdfDocument?.numPages ?? 1;
   }
 
-  private observePage(page: number): void {
+  private landscapeSlices(): boolean {
+    return Platform.isMobile && window.innerWidth >= window.innerHeight;
+  }
+
+  private effectiveFitMode(): "page-fit" | "page-width" {
+    return this.settings.fitMode === "auto"
+      ? this.landscapeSlices() ? "page-width" : "page-fit"
+      : this.settings.fitMode;
+  }
+
+  private observeLocation(page: number, position = this.position): void {
     if (!this.path) return;
+    position = clampPosition(position);
     const orientation = window.innerWidth >= window.innerHeight;
     if (orientation !== this.orientation) {
       this.orientation = orientation;
+      this.position = position;
       this.reflow();
       return;
     }
     const focused = this.plugin.app.workspace.activeLeaf?.view === this.view;
-    const shouldSave = shouldRecordPage(focused, this.restoring, this.armed, page, this.lastObservedPage);
+    const shouldSave = shouldRecordLocation(
+      focused, this.restoring, this.armed, page, this.lastObservedPage, position, this.lastObservedPosition,
+    );
     this.page = page;
+    this.position = position;
     this.lastObservedPage = page;
+    this.lastObservedPosition = position;
     this.ui.update(page, this.pageCount(), this.state);
     if (!shouldSave) return;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     const path = this.path;
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
-      if (this.path !== path || this.page !== page || this.plugin.app.workspace.activeLeaf?.view !== this.view) return;
-      void this.plugin.store.recordProgress(path, page).then((state) => {
+      if (this.path !== path || this.page !== page || this.position !== position || this.plugin.app.workspace.activeLeaf?.view !== this.view) return;
+      void this.plugin.store.recordProgress(path, page, position).then((state) => {
         if (this.path === path) { this.state = state; this.ui.update(this.page, this.pageCount(), state); }
       }).catch((error) => new Notice(`PDF 阅读进度保存失败：${String(error)}`));
     }, 550);
@@ -206,6 +243,7 @@ class PagerSession implements PagerActions {
     const pdf = this.native?.pdfViewer;
     if (!pdf || !pdf.pdfDocument) return;
     const page = clampPage(targetPage ?? pdf.currentPageNumber ?? this.page, this.pageCount());
+    const position = this.position;
     const oldFloor = this.minimumScale;
     const zoom = preserveZoom ? relativeZoom(pdf.currentScale, oldFloor) : 1;
     const revision = ++this.layoutRevision;
@@ -216,7 +254,7 @@ class PagerSession implements PagerActions {
     try {
       pdf.spreadMode = NO_SPREAD;
       pdf.scrollMode = PAGE_MODE;
-      pdf.currentScaleValue = this.settings.fitMode;
+      pdf.currentScaleValue = this.effectiveFitMode();
     } catch {
       this.minimumScale = oldFloor;
       this.restoring = false;
@@ -235,9 +273,11 @@ class PagerSession implements PagerActions {
         if (this.settings.factor !== 1 || zoom !== 1) pdf.currentScaleValue = this.minimumScale * zoom;
       }
       pdf.currentPageNumber = page;
-      this.centerPage(page);
+      this.position = position;
+      this.placePage(page, position);
       this.page = page;
       this.lastObservedPage = page;
+      this.lastObservedPosition = position;
       this.ui.update(page, this.pageCount(), this.state);
       window.setTimeout(() => { if (!this.disposed) this.restoring = false; }, 260);
     });
@@ -255,17 +295,43 @@ class PagerSession implements PagerActions {
     }, 180);
   }
 
-  previous(): void { this.goTo(this.page - 1); }
-  next(): void { this.goTo(this.page + 1); }
+  previous(): void { this.navigateSlice(-1); }
+  next(): void { this.navigateSlice(1); }
+
+  private navigateSlice(direction: -1 | 1): void {
+    const pdf = this.native?.pdfViewer;
+    if (!pdf) return;
+    const count = this.currentSliceCount();
+    const index = this.currentSliceIndex(count);
+    const targetIndex = index + direction;
+    if (targetIndex >= 0 && targetIndex < count) {
+      const position = slicePosition(targetIndex, count);
+      this.position = position;
+      this.placePage(this.page, position);
+      this.observeLocation(this.page, position);
+      return;
+    }
+    const nextPage = clampPage(this.page + direction, this.pageCount());
+    if (nextPage === this.page) return;
+    const position = direction > 0 ? 0 : 1;
+    this.requestedPosition = position;
+    if (this.reflowPage !== null) this.reflowPage = nextPage;
+    pdf.currentPageNumber = nextPage;
+    this.position = position;
+    this.observeLocation(nextPage, position);
+    this.placePage(nextPage, position);
+  }
 
   goTo(page: number): void {
     const pdf = this.native?.pdfViewer;
     if (!pdf || !Number.isFinite(page)) return;
     const next = clampPage(page, this.pageCount());
     if (this.reflowPage !== null) this.reflowPage = next;
+    this.requestedPosition = 0;
     pdf.currentPageNumber = next;
-    this.observePage(next);
-    this.centerPage(next);
+    this.position = 0;
+    this.observeLocation(next, 0);
+    this.placePage(next, 0);
   }
 
   addBookmark(): void {
@@ -285,7 +351,7 @@ class PagerSession implements PagerActions {
   }
 
   fit(mode: "page-fit" | "page-width"): void {
-    this.settings = { fitMode: mode, factor: 1 };
+    this.settings = { version: 2, fitMode: mode, factor: 1 };
     saveDisplaySettings(this.settings);
     this.ui.setFactor(1);
     this.applyMode();
@@ -306,23 +372,74 @@ class PagerSession implements PagerActions {
       const scale = scaleForNewFloor(pdf.currentScale, oldFloor, floor);
       this.minimumScale = floor;
       pdf.currentScaleValue = scale;
-      this.centerPage(pdf.currentPageNumber);
+      this.placePage(pdf.currentPageNumber, this.position);
     }, 75);
   }
 
-  private centerPage(page: number): void {
+  private pageMetrics(page = this.page): { container: HTMLElement; pageEl: HTMLElement; pageTop: number; pageHeight: number; viewportHeight: number } | null {
+    const pdf = this.native?.pdfViewer;
+    const container = pdf?.container;
+    const pageEl = pdf?.getPageView?.(page - 1)?.div;
+    if (!container || !pageEl?.isConnected) return null;
+    const viewport = container.getBoundingClientRect();
+    const sheet = pageEl.getBoundingClientRect();
+    return {
+      container,
+      pageEl,
+      pageTop: sheet.top - viewport.top + container.scrollTop,
+      pageHeight: sheet.height,
+      viewportHeight: container.clientHeight,
+    };
+  }
+
+  private currentSliceCount(): number {
+    const metrics = this.pageMetrics();
+    return metrics ? sliceCount(metrics.pageHeight, metrics.viewportHeight, this.landscapeSlices()) : 1;
+  }
+
+  private currentSliceIndex(count = this.currentSliceCount()): number {
+    const metrics = this.pageMetrics();
+    if (!metrics) return sliceIndex(this.position, count);
+    const position = positionFromScroll(metrics.container.scrollTop, metrics.pageTop, metrics.pageHeight, metrics.viewportHeight);
+    return sliceIndex(position, count);
+  }
+
+  private placePage(page: number, position = this.position): void {
     if (this.centerFrame !== null) window.cancelAnimationFrame(this.centerFrame);
     this.centerFrame = window.requestAnimationFrame(() => {
       this.centerFrame = null;
       const pdf = this.native?.pdfViewer;
       if (!pdf || pdf.currentPageNumber !== page) return;
-      const container = pdf.container;
-      const pageEl = pdf.getPageView?.(page - 1)?.div;
-      if (!container || !pageEl?.isConnected) return;
+      const metrics = this.pageMetrics(page);
+      if (!metrics) return;
+      const { container, pageEl, pageTop, pageHeight, viewportHeight } = metrics;
       const viewport = container.getBoundingClientRect();
       const sheet = pageEl.getBoundingClientRect();
       const delta = (sheet.left + sheet.width / 2) - (viewport.left + viewport.width / 2);
       container.scrollLeft = centeredScrollLeft(container.scrollLeft, container.clientWidth, delta, container.scrollWidth);
+      const enabled = this.landscapeSlices() && pdf.scrollMode === PAGE_MODE;
+      const scrollMax = Math.max(0, container.scrollHeight - container.clientHeight);
+      container.scrollTop = scrollTopForPosition(pageTop, pageHeight, viewportHeight, enabled ? position : 0, scrollMax);
+      this.scheduleSliceReadout();
+    });
+  }
+
+  private scheduleSliceReadout(): void {
+    if (this.sliceFrame !== null) return;
+    this.sliceFrame = window.requestAnimationFrame(() => {
+      this.sliceFrame = null;
+      const pdf = this.native?.pdfViewer;
+      const metrics = this.pageMetrics();
+      if (!pdf || !metrics) return;
+      const enabled = this.landscapeSlices() && pdf.scrollMode === PAGE_MODE;
+      const rawPosition = enabled
+        ? positionFromScroll(metrics.container.scrollTop, metrics.pageTop, metrics.pageHeight, metrics.viewportHeight)
+        : 0;
+      const count = sliceCount(metrics.pageHeight, metrics.viewportHeight, enabled);
+      const index = sliceIndex(rawPosition, count);
+      const position = enabled ? slicePosition(index, count) : 0;
+      this.ui.setSlice(index, count);
+      if (Math.abs(position - this.position) > 0.001) this.observeLocation(this.page, position);
     });
   }
 
@@ -358,7 +475,8 @@ class PagerSession implements PagerActions {
     this.reflowPage = null;
     if (this.scaleClampFrame !== null) window.cancelAnimationFrame(this.scaleClampFrame);
     if (this.centerFrame !== null) window.cancelAnimationFrame(this.centerFrame);
-    this.scaleClampFrame = this.centerFrame = null;
+    if (this.sliceFrame !== null) window.cancelAnimationFrame(this.sliceFrame);
+    this.scaleClampFrame = this.centerFrame = this.sliceFrame = null;
   }
 
   dispose(): void {
@@ -369,6 +487,7 @@ class PagerSession implements PagerActions {
     this.native?.eventBus.off("pagesinit", this.onPagesInit);
     this.native?.eventBus.off("pagechanging", this.onPageChanging);
     this.native?.eventBus.off("scalechanging", this.onScaleChanging);
+    this.native?.pdfViewer.container.removeEventListener("scroll", this.onContainerScroll);
     this.restoreOriginal();
     this.ui.destroy();
   }
