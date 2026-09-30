@@ -141,6 +141,33 @@
   touch-action: none;
 }
 
+.pdf-pager-slice-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.pdf-pager-slice-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px dashed var(--interactive-accent);
+  opacity: .72;
+}
+
+.pdf-pager-slice-guide span {
+  position: absolute;
+  right: 8px;
+  top: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (pointer: coarse) {
   .pdf-pager-panel {
     left: 50%;

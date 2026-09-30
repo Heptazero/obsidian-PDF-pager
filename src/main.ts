@@ -4,7 +4,7 @@ import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type Nati
 import { PagerUi, type PagerActions } from "./pager-ui";
 import { StateStore } from "./state-store";
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
-import { clampPosition, positionFromScroll, scrollTopForPosition, sliceCount, sliceIndex, slicePosition } from "./slices";
+import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 
@@ -64,6 +64,8 @@ class PagerSession implements PagerActions {
   private scaleClampFrame: number | null = null;
   private centerFrame: number | null = null;
   private sliceFrame: number | null = null;
+  private sliceGuideHost: HTMLElement | null = null;
+  private sliceGuidePage: HTMLElement | null = null;
   private layoutRevision = 0;
   private original: { scrollMode: number; spreadMode: number; scaleValue: string | number } | null = null;
   private modeErrorShown = false;
@@ -305,7 +307,10 @@ class PagerSession implements PagerActions {
     const index = this.currentSliceIndex(count);
     const targetIndex = index + direction;
     if (targetIndex >= 0 && targetIndex < count) {
-      const position = slicePosition(targetIndex, count);
+      const metrics = this.pageMetrics();
+      const position = metrics
+        ? slicePosition(targetIndex, metrics.pageHeight, metrics.viewportHeight, count)
+        : this.position;
       this.position = position;
       this.placePage(this.page, position);
       this.observeLocation(this.page, position);
@@ -399,9 +404,9 @@ class PagerSession implements PagerActions {
 
   private currentSliceIndex(count = this.currentSliceCount()): number {
     const metrics = this.pageMetrics();
-    if (!metrics) return sliceIndex(this.position, count);
-    const position = positionFromScroll(metrics.container.scrollTop, metrics.pageTop, metrics.pageHeight, metrics.viewportHeight);
-    return sliceIndex(position, count);
+    if (!metrics) return 0;
+    const offset = metrics.container.scrollTop - metrics.pageTop;
+    return sliceIndexAtOffset(offset, metrics.pageHeight, metrics.viewportHeight, count);
   }
 
   private placePage(page: number, position = this.position): void {
@@ -420,6 +425,7 @@ class PagerSession implements PagerActions {
       const enabled = this.landscapeSlices() && pdf.scrollMode === PAGE_MODE;
       const scrollMax = Math.max(0, container.scrollHeight - container.clientHeight);
       container.scrollTop = scrollTopForPosition(pageTop, pageHeight, viewportHeight, enabled ? position : 0, scrollMax);
+      this.updateSliceGuides(metrics, enabled, sliceCount(pageHeight, viewportHeight, enabled));
       this.scheduleSliceReadout();
     });
   }
@@ -432,15 +438,47 @@ class PagerSession implements PagerActions {
       const metrics = this.pageMetrics();
       if (!pdf || !metrics) return;
       const enabled = this.landscapeSlices() && pdf.scrollMode === PAGE_MODE;
-      const rawPosition = enabled
-        ? positionFromScroll(metrics.container.scrollTop, metrics.pageTop, metrics.pageHeight, metrics.viewportHeight)
-        : 0;
       const count = sliceCount(metrics.pageHeight, metrics.viewportHeight, enabled);
-      const index = sliceIndex(rawPosition, count);
-      const position = enabled ? slicePosition(index, count) : 0;
+      const offset = metrics.container.scrollTop - metrics.pageTop;
+      const index = sliceIndexAtOffset(offset, metrics.pageHeight, metrics.viewportHeight, count);
+      const position = enabled ? slicePosition(index, metrics.pageHeight, metrics.viewportHeight, count) : 0;
+      this.updateSliceGuides(metrics, enabled, count);
       this.ui.setSlice(index, count);
       if (Math.abs(position - this.position) > 0.001) this.observeLocation(this.page, position);
     });
+  }
+
+  private updateSliceGuides(
+    metrics: { pageEl: HTMLElement; pageHeight: number; viewportHeight: number },
+    enabled: boolean,
+    count: number,
+  ): void {
+    if (!enabled || count <= 1) {
+      this.sliceGuideHost?.remove();
+      this.sliceGuideHost = null;
+      this.sliceGuidePage = null;
+      return;
+    }
+    if (this.sliceGuidePage !== metrics.pageEl) {
+      this.sliceGuideHost?.remove();
+      this.sliceGuideHost = document.createElement("div");
+      this.sliceGuideHost.className = "pdf-pager-slice-guides";
+      this.sliceGuideHost.setAttribute("aria-hidden", "true");
+      metrics.pageEl.append(this.sliceGuideHost);
+      this.sliceGuidePage = metrics.pageEl;
+    }
+    const host = this.sliceGuideHost;
+    if (!host) return;
+    host.replaceChildren();
+    for (let index = 1; index < count; index += 1) {
+      const guide = document.createElement("div");
+      guide.className = "pdf-pager-slice-guide";
+      guide.style.top = `${sliceOffset(index, metrics.pageHeight, metrics.viewportHeight, count)}px`;
+      const label = document.createElement("span");
+      label.textContent = `${index + 1}/${count}`;
+      guide.append(label);
+      host.append(guide);
+    }
   }
 
   toggleBar(): void { this.ui.toggleBar(); }
@@ -477,6 +515,9 @@ class PagerSession implements PagerActions {
     if (this.centerFrame !== null) window.cancelAnimationFrame(this.centerFrame);
     if (this.sliceFrame !== null) window.cancelAnimationFrame(this.sliceFrame);
     this.scaleClampFrame = this.centerFrame = this.sliceFrame = null;
+    this.sliceGuideHost?.remove();
+    this.sliceGuideHost = null;
+    this.sliceGuidePage = null;
   }
 
   dispose(): void {
