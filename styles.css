@@ -27,12 +27,18 @@
   display: none;
 }
 
-.pdf-pager-thumbnail {
+.pdf-pager-rail {
   display: none;
   position: absolute;
   z-index: 47;
-  width: 58px;
-  padding: 6px 6px 5px;
+  right: max(8px, env(safe-area-inset-right));
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 44px;
+  padding: 4px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--background-primary) 88%, transparent);
@@ -42,45 +48,23 @@
   user-select: none;
 }
 
-.pdf-pager-thumbnail-sheet {
-  position: relative;
-  width: 46px;
-  min-height: 34px;
+.pdf-pager-rail .pdf-pager-button,
+.pdf-pager-rail-status {
+  width: 36px;
+  height: 34px;
+}
+
+.pdf-pager-rail-status {
   overflow: hidden;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 3px;
-  background: var(--background-secondary);
-}
-
-.pdf-pager-thumbnail-viewport {
-  position: absolute;
-  left: 0;
-  right: 0;
-  border: 2px solid var(--interactive-accent);
-  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
-  box-sizing: border-box;
-}
-
-.pdf-pager-thumbnail-label {
-  display: block;
-  margin-top: 3px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
-  line-height: 1.1;
-  text-align: center;
   font-variant-numeric: tabular-nums;
-}
-
-.pdf-pager-thumbnail > .pdf-pager-button {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 25px;
-  height: 25px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 50%;
-  background: var(--background-primary);
-  box-shadow: var(--shadow-s);
+  line-height: 1;
+  text-align: center;
 }
 
 .pdf-pager-button {
@@ -237,12 +221,6 @@
     transform: none;
   }
 
-  .pdf-pager-thumbnail {
-    display: block;
-    right: max(10px, env(safe-area-inset-right));
-    top: max(12px, env(safe-area-inset-top));
-  }
-
   .pdf-pager-panel {
     left: 50%;
     right: auto;
@@ -250,19 +228,13 @@
   }
 }
 
-@media (pointer: coarse) and (orientation: landscape) {
-  .pdf-pager-thumbnail {
-    top: 50%;
-    right: calc(max(10px, env(safe-area-inset-right)) + 42px);
-    transform: translateY(-50%);
+@media (pointer: coarse) {
+  .pdf-pager-rail {
+    display: flex;
   }
 
   .pdf-pager-bar.is-mobile-expanded {
-    top: 50%;
-    bottom: auto;
-    right: max(10px, env(safe-area-inset-right));
-    transform: translateY(-50%);
-    flex-direction: column;
+    flex-direction: row;
   }
 }
 

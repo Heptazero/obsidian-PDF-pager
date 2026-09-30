@@ -42,11 +42,10 @@ export class PagerUi {
   private bookmark: HTMLButtonElement;
   private listButton: HTMLButtonElement;
   private widthButton: HTMLButtonElement;
-  private thumbnail: HTMLDivElement;
-  private thumbnailSheet: HTMLDivElement;
-  private thumbnailViewport: HTMLDivElement;
-  private thumbnailLabel: HTMLSpanElement;
-  private thumbnailMenu: HTMLButtonElement;
+  private rail: HTMLDivElement;
+  private railPrev: HTMLButtonElement;
+  private railStatus: HTMLButtonElement;
+  private railNext: HTMLButtonElement;
   private headerAction: HTMLElement;
   private state: ReadingState = { bookmarks: [] };
   private page = 1;
@@ -56,10 +55,6 @@ export class PagerUi {
   private factor = 1;
   private sliceIndex = 0;
   private sliceCount = 1;
-  private thumbnailPosition = 0;
-  private pageWidth = 1;
-  private pageHeight = 1;
-  private viewportHeight = 1;
   private widthSlider: HTMLInputElement | null = null;
   private widthLabel: HTMLSpanElement | null = null;
 
@@ -87,28 +82,18 @@ export class PagerUi {
     this.panel.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
     this.panel.addEventListener("click", (event) => event.stopPropagation());
     this.panel.addEventListener("keydown", (event) => event.stopPropagation());
-    this.thumbnail = view.containerEl.createDiv("pdf-pager-thumbnail");
-    this.thumbnail.setAttribute("role", "button");
-    this.thumbnail.tabIndex = 0;
-    this.thumbnail.setAttribute("aria-label", "PDF 分屏缩略图，点击翻页");
-    this.thumbnail.addEventListener("pointerdown", (event) => event.stopPropagation());
-    this.thumbnail.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-    this.thumbnail.addEventListener("click", (event) => {
-      if (event.target === this.thumbnailMenu) return;
-      const rect = this.thumbnailSheet.getBoundingClientRect();
-      if (event.clientY - rect.top < rect.height / 2) this.actions.previous();
-      else this.actions.next();
+    this.rail = view.containerEl.createDiv("pdf-pager-rail");
+    this.rail.addEventListener("pointerdown", (event) => event.stopPropagation());
+    this.rail.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
+    this.rail.addEventListener("keydown", (event) => event.stopPropagation());
+    this.railPrev = button(this.rail, "chevron-left", "上一屏", () => this.actions.previous());
+    this.railStatus = this.rail.createEl("button", {
+      cls: "pdf-pager-rail-status",
+      text: "1/1",
+      attr: { type: "button", "aria-label": "展开 PDF 翻页控制" },
     });
-    this.thumbnail.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); this.actions.previous(); }
-      if (event.key === "ArrowDown" || event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
-        event.preventDefault(); this.actions.next();
-      }
-    });
-    this.thumbnailSheet = this.thumbnail.createDiv("pdf-pager-thumbnail-sheet");
-    this.thumbnailViewport = this.thumbnailSheet.createDiv("pdf-pager-thumbnail-viewport");
-    this.thumbnailLabel = this.thumbnail.createSpan("pdf-pager-thumbnail-label");
-    this.thumbnailMenu = button(this.thumbnail, "ellipsis", "展开 PDF 翻页控制", () => this.toggleBar());
+    this.railStatus.addEventListener("click", (event) => { event.stopPropagation(); this.toggleBar(); });
+    this.railNext = button(this.rail, "chevron-right", "下一屏", () => this.actions.next());
     this.headerAction = view.addAction("book-open", "显示或隐藏 PDF 翻页控制", () => this.toggleBar());
     this.render();
   }
@@ -119,11 +104,10 @@ export class PagerUi {
     this.pageCount = Math.max(1, pageCount);
     this.sliceIndex = 0;
     this.sliceCount = 1;
-    this.thumbnailPosition = 0;
-    this.pageWidth = this.pageHeight = this.viewportHeight = 1;
     this.panelMode = null;
     this.panel.hidden = true;
     this.panel.classList.remove("pdf-pager-panel-width");
+    this.bar.classList.remove("is-mobile-expanded");
     this.render();
   }
 
@@ -140,13 +124,9 @@ export class PagerUi {
     if (this.widthLabel) this.widthLabel.textContent = `${Math.round(factor * 100)}%`;
   }
 
-  setSlice(index: number, count: number, pageWidth = 1, pageHeight = 1, viewportHeight = 1, position = 0): void {
+  setSlice(index: number, count: number): void {
     this.sliceCount = Math.max(1, count);
     this.sliceIndex = Math.max(0, Math.min(this.sliceCount - 1, index));
-    this.pageWidth = Number.isFinite(pageWidth) && pageWidth > 0 ? pageWidth : 1;
-    this.pageHeight = Number.isFinite(pageHeight) && pageHeight > 0 ? pageHeight : 1;
-    this.viewportHeight = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : this.pageHeight;
-    this.thumbnailPosition = Math.max(0, Math.min(1, position));
     this.render();
   }
 
@@ -189,16 +169,17 @@ export class PagerUi {
     this.bookmark.disabled = already;
     this.bookmark.setAttribute("aria-label", already ? "当前页已有书签" : "给当前页加书签");
     this.listButton.setAttribute("aria-label", `书签列表，${this.state.bookmarks.length} 个`);
-    const viewportRatio = Math.min(1, this.viewportHeight / this.pageHeight);
-    this.thumbnailSheet.style.aspectRatio = `${this.pageWidth} / ${this.pageHeight}`;
-    this.thumbnailViewport.style.height = `${viewportRatio * 100}%`;
-    this.thumbnailViewport.style.top = `${this.thumbnailPosition * (1 - viewportRatio) * 100}%`;
-    this.thumbnailLabel.textContent = this.sliceCount > 1
+    const status = this.sliceCount > 1
       ? `${this.sliceIndex + 1}/${this.sliceCount}`
       : `${this.page}/${this.pageCount}`;
-    this.thumbnail.setAttribute("aria-label", this.sliceCount > 1
-      ? `PDF 第 ${this.page} 页，第 ${this.sliceIndex + 1}/${this.sliceCount} 屏，点击上半区上一屏、下半区下一屏`
-      : `PDF 第 ${this.page}/${this.pageCount} 页，点击上半区上一页、下半区下一页`);
+    this.railStatus.textContent = status;
+    this.railStatus.setAttribute("aria-label", this.sliceCount > 1
+      ? `当前第 ${this.sliceIndex + 1}/${this.sliceCount} 屏，点击展开完整控制`
+      : `当前第 ${this.page}/${this.pageCount} 页，点击展开完整控制`);
+    this.railPrev.disabled = this.prev.disabled;
+    this.railNext.disabled = this.next.disabled;
+    this.railPrev.setAttribute("aria-label", this.prev.getAttribute("aria-label") ?? "上一屏");
+    this.railNext.setAttribute("aria-label", this.next.getAttribute("aria-label") ?? "下一屏");
     if (this.panelMode === "bookmarks") this.renderPanel();
   }
 
@@ -251,7 +232,7 @@ export class PagerUi {
     this.headerAction.remove();
     this.bar.remove();
     this.panel.remove();
-    this.thumbnail.remove();
+    this.rail.remove();
     this.view.containerEl.removeClass("pdf-pager-host");
   }
 }

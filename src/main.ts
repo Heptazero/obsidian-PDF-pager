@@ -443,7 +443,7 @@ class PagerSession implements PagerActions {
       const index = sliceIndexAtOffset(offset, metrics.pageHeight, metrics.viewportHeight, count);
       const position = enabled ? slicePosition(index, metrics.pageHeight, metrics.viewportHeight, count) : 0;
       this.updateSliceGuides(metrics, enabled, count);
-      this.ui.setSlice(index, count, metrics.pageEl.getBoundingClientRect().width, metrics.pageHeight, metrics.viewportHeight, position);
+      this.ui.setSlice(index, count);
       if (Math.abs(position - this.position) > 0.001) this.observeLocation(this.page, position);
     });
   }
