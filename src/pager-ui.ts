@@ -46,6 +46,14 @@ export class PagerUi {
   private railPrev: HTMLButtonElement;
   private railStatus: HTMLButtonElement;
   private railNext: HTMLButtonElement;
+  private railDragTimer: number | null = null;
+  private railDragging = false;
+  private railPointerId: number | null = null;
+  private railStartX = 0;
+  private railStartY = 0;
+  private railOffsetX = 0;
+  private railOffsetY = 0;
+  private railSuppressClick = false;
   private headerAction: HTMLElement;
   private state: ReadingState = { bookmarks: [] };
   private page = 1;
@@ -83,9 +91,14 @@ export class PagerUi {
     this.panel.addEventListener("click", (event) => event.stopPropagation());
     this.panel.addEventListener("keydown", (event) => event.stopPropagation());
     this.rail = view.containerEl.createDiv("pdf-pager-rail");
-    this.rail.addEventListener("pointerdown", (event) => event.stopPropagation());
+    this.rail.addEventListener("pointerdown", this.onRailPointerDown);
+    this.rail.addEventListener("pointermove", this.onRailPointerMove);
+    this.rail.addEventListener("pointerup", this.onRailPointerUp);
+    this.rail.addEventListener("pointercancel", this.onRailPointerUp);
+    this.rail.addEventListener("click", this.onRailClick, true);
     this.rail.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
     this.rail.addEventListener("keydown", (event) => event.stopPropagation());
+    window.addEventListener("orientationchange", this.resetRailPlacement);
     this.railPrev = button(this.rail, "chevron-left", "上一屏", () => this.actions.previous());
     this.railStatus = this.rail.createEl("button", {
       cls: "pdf-pager-rail-status",
@@ -108,6 +121,7 @@ export class PagerUi {
     this.panel.hidden = true;
     this.panel.classList.remove("pdf-pager-panel-width");
     this.bar.classList.remove("is-mobile-expanded");
+    this.resetRailPlacement();
     this.render();
   }
 
@@ -229,10 +243,87 @@ export class PagerUi {
   }
 
   destroy(): void {
+    this.clearRailDrag();
+    window.removeEventListener("orientationchange", this.resetRailPlacement);
     this.headerAction.remove();
     this.bar.remove();
     this.panel.remove();
     this.rail.remove();
     this.view.containerEl.removeClass("pdf-pager-host");
   }
+
+  private readonly onRailPointerDown = (event: PointerEvent): void => {
+    event.stopPropagation();
+    if (!event.isPrimary) return;
+    const rect = this.rail.getBoundingClientRect();
+    this.railPointerId = event.pointerId;
+    this.railStartX = event.clientX;
+    this.railStartY = event.clientY;
+    this.railOffsetX = event.clientX - rect.left;
+    this.railOffsetY = event.clientY - rect.top;
+    this.clearRailDragTimer();
+    this.railDragTimer = window.setTimeout(() => {
+      this.railDragging = true;
+      this.rail.classList.add("is-dragging");
+      this.rail.setPointerCapture(event.pointerId);
+    }, 500);
+  };
+
+  private readonly onRailPointerMove = (event: PointerEvent): void => {
+    if (event.pointerId !== this.railPointerId) return;
+    event.stopPropagation();
+    if (!this.railDragging) {
+      const moved = Math.hypot(event.clientX - this.railStartX, event.clientY - this.railStartY);
+      if (moved > 8) this.clearRailDragTimer();
+      return;
+    }
+    event.preventDefault();
+    const host = this.view.containerEl.getBoundingClientRect();
+    const rail = this.rail.getBoundingClientRect();
+    const left = Math.max(4, Math.min(host.width - rail.width - 4, event.clientX - host.left - this.railOffsetX));
+    const top = Math.max(4, Math.min(host.height - rail.height - 4, event.clientY - host.top - this.railOffsetY));
+    this.rail.style.left = `${left}px`;
+    this.rail.style.top = `${top}px`;
+    this.rail.style.right = "auto";
+    this.rail.style.transform = "none";
+  };
+
+  private readonly onRailPointerUp = (event: PointerEvent): void => {
+    if (event.pointerId !== this.railPointerId) return;
+    event.stopPropagation();
+    if (this.railDragging) {
+      this.railSuppressClick = true;
+      if (this.rail.hasPointerCapture(event.pointerId)) this.rail.releasePointerCapture(event.pointerId);
+      this.rail.classList.remove("is-dragging");
+    }
+    this.clearRailDrag();
+    if (this.railSuppressClick) window.setTimeout(() => { this.railSuppressClick = false; }, 0);
+  };
+
+  private readonly onRailClick = (event: MouseEvent): void => {
+    if (!this.railSuppressClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.railSuppressClick = false;
+  };
+
+  private clearRailDragTimer(): void {
+    if (this.railDragTimer !== null) window.clearTimeout(this.railDragTimer);
+    this.railDragTimer = null;
+  }
+
+  private clearRailDrag(): void {
+    this.clearRailDragTimer();
+    this.railDragging = false;
+    this.railPointerId = null;
+    this.rail.classList.remove("is-dragging");
+  }
+
+  private readonly resetRailPlacement = (): void => {
+    this.clearRailDrag();
+    this.rail.style.left = "";
+    this.rail.style.top = "";
+    this.rail.style.right = "";
+    this.rail.style.transform = "";
+  };
 }

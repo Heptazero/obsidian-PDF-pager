@@ -41,11 +41,17 @@
   padding: 4px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
+  cursor: grab;
   background: color-mix(in srgb, var(--background-primary) 88%, transparent);
   box-shadow: var(--shadow-s);
   color: var(--text-normal);
-  touch-action: manipulation;
+  touch-action: none;
   user-select: none;
+}
+
+.pdf-pager-rail.is-dragging {
+  cursor: grabbing;
+  opacity: .82;
 }
 
 .pdf-pager-rail .pdf-pager-button,
@@ -215,10 +221,10 @@
 
   .pdf-pager-bar.is-mobile-expanded {
     display: flex;
-    left: auto;
-    right: max(10px, env(safe-area-inset-right));
+    left: 50%;
+    right: auto;
     bottom: max(10px, env(safe-area-inset-bottom));
-    transform: none;
+    transform: translateX(-50%);
   }
 
   .pdf-pager-panel {
