@@ -93,10 +93,26 @@ class PagerSession implements PagerActions {
     });
   };
   private readonly onContainerScroll = () => this.scheduleSliceReadout();
+  private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (this.disposed || this.plugin.app.workspace.activeLeaf?.view !== this.view) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.matches("input, textarea, select, button, [contenteditable='true']")) return;
+    if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.previous();
+    } else if (event.key === "ArrowRight" || event.key === "PageDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.next();
+    }
+  };
 
   constructor(private plugin: PdfPagerPlugin, readonly view: FileView) {
     this.ui = new PagerUi(plugin.app, view, this);
     this.ui.setFactor(this.settings.factor);
+    view.containerEl.addEventListener("keydown", this.onKeyDown, true);
     this.resizeObserver = new ResizeObserver(() => this.reflow());
     this.resizeObserver.observe(view.containerEl);
     void this.ensureAttached();
@@ -529,6 +545,7 @@ class PagerSession implements PagerActions {
     this.native?.eventBus.off("pagechanging", this.onPageChanging);
     this.native?.eventBus.off("scalechanging", this.onScaleChanging);
     this.native?.pdfViewer.container.removeEventListener("scroll", this.onContainerScroll);
+    this.view.containerEl.removeEventListener("keydown", this.onKeyDown, true);
     this.restoreOriginal();
     this.ui.destroy();
   }
@@ -575,6 +592,16 @@ export default class PdfPagerPlugin extends Plugin {
     this.addCommand({ id: "fit-page", name: "PDF：适合整页", checkCallback: (checking) => {
       const session = this.activeSession();
       if (!checking) session?.fit("page-fit");
+      return !!session;
+    } });
+    this.addCommand({ id: "previous-page", name: "PDF：上一屏/上一页", checkCallback: (checking) => {
+      const session = this.activeSession();
+      if (!checking) session?.previous();
+      return !!session;
+    } });
+    this.addCommand({ id: "next-page", name: "PDF：下一屏/下一页", checkCallback: (checking) => {
+      const session = this.activeSession();
+      if (!checking) session?.next();
       return !!session;
     } });
   }
