@@ -1,4 +1,18 @@
-# PDF Pager (hz)
+# PDF Pager
+
+Read PDFs page by page in Obsidian, with mobile landscape paging, resume position, bookmarks, and page-width controls.
+
+## Features
+
+- Keeps one PDF page centered and restores the page and in-page position after rotation or reopening.
+- Splits tall pages into screen-sized stops on mobile landscape, recalculating stops after pinch zoom.
+- Provides compact mobile controls, keyboard paging, bookmarks, reading progress, and a minimum-width zoom floor.
+- Stores reading records per device inside the vault configuration folder so synced devices do not overwrite one another's progress.
+- Works offline and contains no network requests, accounts, advertisements, or telemetry.
+
+The plugin uses Obsidian's internal PDF.js viewer interface. An Obsidian update may require a compatibility update to this plugin.
+
+## 中文说明
 
 在 Obsidian 原生 PDF 标签页上提供单页阅读、阅读进度、书签和页面显示宽度控制。插件不修改 PDF 文件。
 
@@ -12,7 +26,7 @@
 - 普通打开 PDF 时恢复最近一次阅读页；显式 PDF 页码链接优先。
 - 仅在聚焦的 PDF 标签页实际翻页后保存进度，避免后台标签页关闭覆盖记录。
 
-进度和书签按 PDF、按设备分别存放在 vault 的 `99_assets/plugin-data/pdf-pager/*.json`，读取时合并。因此同步软件必须包含该目录和 JSON 文件；Obsidian Sync 需要允许同步“其他文件类型”。同时离线阅读同一 PDF 时，以设备记录的时间戳较新者为准，设备时钟严重不一致会影响判断。
+进度和书签按 PDF、按设备分别存放在 vault 配置目录的 `plugins/pdf-pager-hz/records/*.json`（默认位于 `.obsidian/plugins/pdf-pager-hz/records/`），读取时合并。同步软件需要包含 vault 配置目录和这些 JSON 文件。同时离线阅读同一 PDF 时，以设备记录的时间戳较新者为准，设备时钟严重不一致会影响判断。从 `0.1.7` 起，插件会自动读取并迁移旧版 `99_assets/plugin-data/pdf-pager/` 中当前设备的记录。
 
 本插件使用 Obsidian 未公开的 PDF.js 阅读器接口。Obsidian 更新后，如单页模式或页码获取失效，需要调整 `src/native-viewer.ts`。
 
@@ -26,6 +40,10 @@
 
 从 [GitHub Releases](https://github.com/Heptazero/obsidian-PDF-pager/releases) 下载 `manifest.json`、`main.js` 和 `styles.css`，放入 vault 的 `.obsidian/plugins/pdf-pager-hz/`，然后启用插件。更新时替换这三个文件并重新加载插件。
 
-首次公开版本尚未完成真实手机触控验收。建议先用一份熟悉的 PDF 测试横竖屏切换、双指缩放、翻页居中和续读。
+更新 Obsidian 后，建议用一份熟悉的 PDF 复查横竖屏切换、双指缩放、翻页居中和续读，因为插件依赖未公开的 PDF 阅读器接口。
 
 开发：`npm install && npm test && npm run build`。
+
+## License
+
+[MIT](LICENSE)

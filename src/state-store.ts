@@ -1,7 +1,8 @@
 import type { App } from "obsidian";
 import { mergeRecords, pathKey, type Bookmark, type DeviceRecord, type ReadingState } from "./reading-state.ts";
 
-const ROOT = "99_assets/plugin-data/pdf-pager";
+const PLUGIN_ID = "pdf-pager-hz";
+const LEGACY_ROOT = "99_assets/plugin-data/pdf-pager";
 
 function uid(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -40,44 +41,60 @@ function latestTimestamp(record: DeviceRecord): number {
 export class StateStore {
   private readonly device: string;
   private readonly app: App;
+  private readonly root: string;
   private own = new Map<string, DeviceRecord>();
   private pending = new Map<string, Promise<unknown>>();
 
   constructor(app: App) {
     this.app = app;
     this.device = deviceId(app.vault.getName());
+    this.root = `${app.vault.configDir}/plugins/${PLUGIN_ID}/records`;
   }
 
-  private filePath(pdfPath: string, device = this.device): string {
-    return `${ROOT}/${pathKey(pdfPath)}-${device}.json`;
+  private filePath(pdfPath: string, device = this.device, root = this.root): string {
+    return `${root}/${pathKey(pdfPath)}-${device}.json`;
   }
 
   private async ensureRoot(): Promise<void> {
-    for (const folder of ["99_assets", "99_assets/plugin-data", ROOT]) {
-      if (!await this.app.vault.adapter.exists(folder)) await this.app.vault.adapter.mkdir(folder);
-    }
+    // Adapter access is required because the plugin's config folder is hidden from the Vault API.
+    if (!await this.app.vault.adapter.exists(this.root)) await this.app.vault.adapter.mkdir(this.root);
   }
 
   private async records(pdfPath: string): Promise<DeviceRecord[]> {
-    if (!await this.app.vault.adapter.exists(ROOT)) return [];
     const prefix = `${pathKey(pdfPath)}-`;
-    const list = await this.app.vault.adapter.list(ROOT);
-    const files = list.files.filter((file) => file.slice(ROOT.length + 1).startsWith(prefix) && file.endsWith(".json"));
-    const records = await Promise.all(files.map(async (file) => {
-      try {
-        const record = parseRecord(await this.app.vault.adapter.read(file));
-        return record?.pdfPath.normalize("NFC") === pdfPath.normalize("NFC") ? record : null;
-      } catch {
-        return null;
-      }
+    const batches = await Promise.all([this.root, LEGACY_ROOT].map(async (root) => {
+      if (!await this.app.vault.adapter.exists(root)) return [];
+      const list = await this.app.vault.adapter.list(root);
+      const files = list.files.filter((file) => file.slice(root.length + 1).startsWith(prefix) && file.endsWith(".json"));
+      return Promise.all(files.map(async (file) => {
+        try {
+          const record = parseRecord(await this.app.vault.adapter.read(file));
+          return record?.pdfPath.normalize("NFC") === pdfPath.normalize("NFC") ? record : null;
+        } catch {
+          return null;
+        }
+      }));
     }));
-    return records.filter((record): record is DeviceRecord => record !== null);
+    const newestByDevice = new Map<string, DeviceRecord>();
+    for (const record of batches.flat()) {
+      if (!record) continue;
+      const current = newestByDevice.get(record.deviceId);
+      if (!current || latestTimestamp(record) > latestTimestamp(current)) newestByDevice.set(record.deviceId, record);
+    }
+    return [...newestByDevice.values()];
   }
 
   async load(pdfPath: string): Promise<ReadingState> {
     const records = await this.records(pdfPath);
     const current = records.find((record) => record.deviceId === this.device);
-    if (current) this.own.set(pdfPath, current);
+    if (current) {
+      this.own.set(pdfPath, current);
+      const currentPath = this.filePath(pdfPath);
+      if (!await this.app.vault.adapter.exists(currentPath)) {
+        await this.ensureRoot();
+        await this.app.vault.adapter.write(currentPath, JSON.stringify(current, null, 2) + "\n");
+      }
+    }
     return mergeRecords(records);
   }
 
@@ -147,21 +164,25 @@ export class StateStore {
         }
       } catch { /* No destination record yet. */ }
       await this.app.vault.adapter.write(to, JSON.stringify(renamed, null, 2) + "\n");
-      if (from !== to) await this.app.vault.adapter.remove(from);
+      if (from !== to && await this.app.vault.adapter.exists(from)) await this.app.vault.adapter.remove(from);
+      const legacyFrom = this.filePath(oldPath, record.deviceId, LEGACY_ROOT);
+      if (await this.app.vault.adapter.exists(legacyFrom)) await this.app.vault.adapter.remove(legacyFrom);
       if (record.deviceId === this.device) this.own.set(newPath, renamed);
     }
     this.own.delete(oldPath);
   }
 
   async renamePrefix(oldFolder: string, newFolder: string): Promise<void> {
-    if (!await this.app.vault.adapter.exists(ROOT)) return;
-    const files = (await this.app.vault.adapter.list(ROOT)).files.filter((file) => file.endsWith(".json"));
     const paths = new Set<string>();
-    for (const file of files) {
-      try {
-        const record = parseRecord(await this.app.vault.adapter.read(file));
-        if (record?.pdfPath.startsWith(oldFolder + "/")) paths.add(record.pdfPath);
-      } catch { /* Ignore unreadable sidecars. */ }
+    for (const root of [this.root, LEGACY_ROOT]) {
+      if (!await this.app.vault.adapter.exists(root)) continue;
+      const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
+      for (const file of files) {
+        try {
+          const record = parseRecord(await this.app.vault.adapter.read(file));
+          if (record?.pdfPath.startsWith(oldFolder + "/")) paths.add(record.pdfPath);
+        } catch { /* Ignore unreadable sidecars. */ }
+      }
     }
     for (const path of paths) await this.rename(path, newFolder + path.slice(oldFolder.length));
   }
