@@ -1,16 +1,19 @@
 {
   "name": "pdf-pager-hz",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "lint": "eslint src",
     "build": "npm run typecheck && node esbuild.config.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "esbuild": "^0.28.2",
+    "eslint": "^10.0.0",
+    "eslint-plugin-obsidianmd": "latest",
     "obsidian": "latest",
     "typescript": "^5.5.0"
   }

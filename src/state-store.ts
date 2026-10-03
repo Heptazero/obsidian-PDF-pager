@@ -5,21 +5,18 @@ const PLUGIN_ID = "pdf-pager-hz";
 const LEGACY_ROOT = "99_assets/plugin-data/pdf-pager";
 
 function uid(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return typeof window !== "undefined" && window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function deviceId(vaultName: string): string {
-  const key = `pdf-pager-hz:device:${vaultName}`;
-  try {
-    const previous = localStorage.getItem(key);
-    if (previous && /^[a-zA-Z0-9-]{8,80}$/.test(previous)) return previous;
-    const created = uid();
-    localStorage.setItem(key, created);
-    return created;
-  } catch {
-    // WebView storage can be disabled. This limits sync isolation for this run.
-    return uid();
-  }
+function deviceId(app: App): string {
+  const key = `pdf-pager-hz:device:${app.vault.getName()}`;
+  const previous: unknown = app.loadLocalStorage(key);
+  if (typeof previous === "string" && /^[a-zA-Z0-9-]{8,80}$/.test(previous)) return previous;
+  const created = uid();
+  app.saveLocalStorage(key, created);
+  return created;
 }
 
 function parseRecord(raw: string): DeviceRecord | null {
@@ -47,7 +44,7 @@ export class StateStore {
 
   constructor(app: App) {
     this.app = app;
-    this.device = deviceId(app.vault.getName());
+    this.device = deviceId(app);
     this.root = `${app.vault.configDir}/plugins/${PLUGIN_ID}/records`;
   }
 

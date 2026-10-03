@@ -1,8 +1,14 @@
 import type { FileView } from "obsidian";
 
 export interface PdfEventBus {
-  on(name: string, handler: (event: any) => void): void;
-  off(name: string, handler: (event: any) => void): void;
+  on<K extends keyof PdfEventMap>(name: K, handler: (event: PdfEventMap[K]) => void): void;
+  off<K extends keyof PdfEventMap>(name: K, handler: (event: PdfEventMap[K]) => void): void;
+}
+
+interface PdfEventMap {
+  pagesinit: undefined;
+  pagechanging: { pageNumber?: number };
+  scalechanging: { scale?: number };
 }
 
 export interface PdfViewer {
@@ -49,7 +55,7 @@ export const NO_SPREAD = 0;
 
 export function hasExplicitPageTarget(view: FileView): boolean {
   const state = view.leaf.getViewState();
-  const data = state.state as Record<string, unknown> | undefined;
+  const data = state.state;
   const extra = (state as typeof state & { eState?: Record<string, unknown> }).eState;
   const parts = [data?.subpath, data?.page, extra?.subpath, extra?.page];
   return parts.some((part) => typeof part === "number" || (typeof part === "string" && /(?:^|[#&])page=\d+/.test(part)));

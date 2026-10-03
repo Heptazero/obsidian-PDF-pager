@@ -54,6 +54,13 @@
   opacity: .82;
 }
 
+.pdf-pager-rail.is-placed {
+  left: var(--pdf-pager-rail-left);
+  top: var(--pdf-pager-rail-top);
+  right: auto;
+  transform: none;
+}
+
 .pdf-pager-rail .pdf-pager-button,
 .pdf-pager-rail-status {
   width: 36px;
@@ -196,6 +203,7 @@
 
 .pdf-pager-slice-guide {
   position: absolute;
+  top: var(--pdf-pager-slice-guide-top);
   left: 0;
   right: 0;
   border-top: 2px dashed var(--interactive-accent);

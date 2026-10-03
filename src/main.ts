@@ -1,4 +1,4 @@
-import { FileView, Notice, Platform, Plugin, TFile, TFolder } from "obsidian";
+import { FileView, Notice, Platform, Plugin, TFile, TFolder, type App } from "obsidian";
 import { clampPage, shouldRecordLocation, type Bookmark, type ReadingState } from "./reading-state";
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
@@ -14,24 +14,21 @@ interface DisplaySettings {
   factor: number;
 }
 
-function loadDisplaySettings(): DisplaySettings {
-  try {
-    const value = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "null") as Partial<DisplaySettings> | null;
-    const fitMode = value?.version === 2
-      ? value.fitMode === "page-fit" || value.fitMode === "page-width" ? value.fitMode : "auto"
-      : value?.fitMode === "page-width" ? "page-width" : "auto";
-    return {
-      version: 2,
-      fitMode,
-      factor: typeof value?.factor === "number" && value.factor >= 0.7 && value.factor <= 1.6 ? value.factor : 1,
-    };
-  } catch {
-    return { version: 2, fitMode: "auto", factor: 1 };
-  }
+function loadDisplaySettings(app: App): DisplaySettings {
+  const loaded: unknown = app.loadLocalStorage(SETTINGS_KEY);
+  const value = loaded && typeof loaded === "object" ? loaded as Partial<DisplaySettings> : null;
+  const fitMode = value?.version === 2
+    ? value.fitMode === "page-fit" || value.fitMode === "page-width" ? value.fitMode : "auto"
+    : value?.fitMode === "page-width" ? "page-width" : "auto";
+  return {
+    version: 2,
+    fitMode,
+    factor: typeof value?.factor === "number" && value.factor >= 0.7 && value.factor <= 1.6 ? value.factor : 1,
+  };
 }
 
-function saveDisplaySettings(settings: DisplaySettings): void {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* No persistent WebView storage. */ }
+function saveDisplaySettings(app: App, settings: DisplaySettings): void {
+  app.saveLocalStorage(SETTINGS_KEY, settings);
 }
 
 class PagerSession implements PagerActions {
@@ -69,7 +66,7 @@ class PagerSession implements PagerActions {
   private layoutRevision = 0;
   private original: { scrollMode: number; spreadMode: number; scaleValue: string | number } | null = null;
   private modeErrorShown = false;
-  private settings = loadDisplaySettings();
+  private settings: DisplaySettings;
 
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
@@ -94,7 +91,7 @@ class PagerSession implements PagerActions {
   };
   private readonly onContainerScroll = () => this.scheduleSliceReadout();
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (this.disposed || this.plugin.app.workspace.activeLeaf?.view !== this.view) return;
+    if (this.disposed || !this.isActive()) return;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const target = event.target;
     if (target instanceof HTMLElement && target.matches("input, textarea, select, button, [contenteditable='true']")) return;
@@ -110,6 +107,7 @@ class PagerSession implements PagerActions {
   };
 
   constructor(private plugin: PdfPagerPlugin, readonly view: FileView) {
+    this.settings = loadDisplaySettings(plugin.app);
     this.ui = new PagerUi(plugin.app, view, this);
     this.ui.setFactor(this.settings.factor);
     view.containerEl.addEventListener("keydown", this.onKeyDown, true);
@@ -212,6 +210,10 @@ class PagerSession implements PagerActions {
     return !this.disposed && this.path === path && this.document === doc && this.generation === generation;
   }
 
+  private isActive(): boolean {
+    return this.plugin.app.workspace.getActiveViewOfType(FileView) === this.view;
+  }
+
   private pageCount(): number {
     return this.native?.pdfViewer.pdfDocument?.numPages ?? 1;
   }
@@ -236,7 +238,7 @@ class PagerSession implements PagerActions {
       this.reflow();
       return;
     }
-    const focused = this.plugin.app.workspace.activeLeaf?.view === this.view;
+    const focused = this.isActive();
     const shouldSave = shouldRecordLocation(
       focused, this.restoring, this.armed, page, this.lastObservedPage, position, this.lastObservedPosition,
     );
@@ -250,7 +252,7 @@ class PagerSession implements PagerActions {
     const path = this.path;
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
-      if (this.path !== path || this.page !== page || this.position !== position || this.plugin.app.workspace.activeLeaf?.view !== this.view) return;
+      if (this.path !== path || this.page !== page || this.position !== position || !this.isActive()) return;
       void this.plugin.store.recordProgress(path, page, position).then((state) => {
         if (this.path === path) { this.state = state; this.ui.update(this.page, this.pageCount(), state); }
       }).catch((error) => new Notice(`PDF 阅读进度保存失败：${String(error)}`));
@@ -373,7 +375,7 @@ class PagerSession implements PagerActions {
 
   fit(mode: "page-fit" | "page-width"): void {
     this.settings = { version: 2, fitMode: mode, factor: 1 };
-    saveDisplaySettings(this.settings);
+    saveDisplaySettings(this.plugin.app, this.settings);
     this.ui.setFactor(1);
     this.applyMode();
   }
@@ -382,7 +384,7 @@ class PagerSession implements PagerActions {
     if (!Number.isFinite(factor)) return;
     const oldFloor = this.minimumScale;
     this.settings.factor = Math.max(0.7, Math.min(1.6, factor));
-    saveDisplaySettings(this.settings);
+    saveDisplaySettings(this.plugin.app, this.settings);
     this.ui.setFactor(this.settings.factor);
     if (this.zoomTimer !== null) window.clearTimeout(this.zoomTimer);
     this.zoomTimer = window.setTimeout(() => {
@@ -477,23 +479,21 @@ class PagerSession implements PagerActions {
     }
     if (this.sliceGuidePage !== metrics.pageEl) {
       this.sliceGuideHost?.remove();
-      this.sliceGuideHost = document.createElement("div");
-      this.sliceGuideHost.className = "pdf-pager-slice-guides";
-      this.sliceGuideHost.setAttribute("aria-hidden", "true");
-      metrics.pageEl.append(this.sliceGuideHost);
+      this.sliceGuideHost = metrics.pageEl.createDiv({
+        cls: "pdf-pager-slice-guides",
+        attr: { "aria-hidden": "true" },
+      });
       this.sliceGuidePage = metrics.pageEl;
     }
     const host = this.sliceGuideHost;
     if (!host) return;
     host.replaceChildren();
     for (let index = 1; index < count; index += 1) {
-      const guide = document.createElement("div");
-      guide.className = "pdf-pager-slice-guide";
-      guide.style.top = `${sliceOffset(index, metrics.pageHeight, metrics.viewportHeight, count)}px`;
-      const label = document.createElement("span");
-      label.textContent = `${index + 1}/${count}`;
-      guide.append(label);
-      host.append(guide);
+      const guide = host.createDiv("pdf-pager-slice-guide");
+      guide.setCssProps({
+        "--pdf-pager-slice-guide-top": `${sliceOffset(index, metrics.pageHeight, metrics.viewportHeight, count)}px`,
+      });
+      guide.createSpan({ text: `${index + 1}/${count}` });
     }
   }
 
@@ -607,8 +607,8 @@ export default class PdfPagerPlugin extends Plugin {
   }
 
   private activeSession(): PagerSession | null {
-    const view = this.app.workspace.activeLeaf?.view;
-    return view instanceof FileView && view.getViewType() === "pdf" ? this.sessions.get(view) ?? null : null;
+    const view = this.app.workspace.getActiveViewOfType(FileView);
+    return view?.getViewType() === "pdf" ? this.sessions.get(view) ?? null : null;
   }
 
   private scan(): void {

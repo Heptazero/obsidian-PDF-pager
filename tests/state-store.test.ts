@@ -21,17 +21,18 @@ class MemoryAdapter {
   async remove(path: string): Promise<void> { this.files.delete(path); }
 }
 
+function memoryApp(adapter: MemoryAdapter, storage: Map<string, unknown>): App {
+  return {
+    vault: { getName: () => "test-vault", configDir: ".obsidian", adapter },
+    loadLocalStorage: (key: string) => storage.get(key) ?? null,
+    saveLocalStorage: (key: string, value: unknown) => storage.set(key, value),
+  } as unknown as App;
+}
+
 test("two devices keep independent files, merge bookmarks, and follow a PDF rename", async () => {
   const adapter = new MemoryAdapter();
-  const storage = new Map<string, string>();
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-    },
-  });
-  const app = { vault: { getName: () => "test-vault", configDir: ".obsidian", adapter } } as unknown as App;
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
   storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
   const first = new StateStore(app);
   await first.recordProgress("资料/论文.pdf", 10);
@@ -59,14 +60,7 @@ test("two devices keep independent files, merge bookmarks, and follow a PDF rena
 
 test("legacy vault records are loaded and copied into the plugin config folder", async () => {
   const adapter = new MemoryAdapter();
-  const storage = new Map<string, string>();
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-    },
-  });
+  const storage = new Map<string, unknown>();
   const path = "资料/旧论文.pdf";
   const device = "device-aaaaaaaa";
   const legacyRoot = "99_assets/plugin-data/pdf-pager";
@@ -79,7 +73,7 @@ test("legacy vault records are loaded and copied into the plugin config folder",
     bookmarks: {},
   }));
   storage.set("pdf-pager-hz:device:test-vault", device);
-  const app = { vault: { getName: () => "test-vault", configDir: ".obsidian", adapter } } as unknown as App;
+  const app = memoryApp(adapter, storage);
 
   const store = new StateStore(app);
   assert.equal((await store.load(path)).progress?.page, 6);

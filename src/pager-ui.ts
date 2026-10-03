@@ -282,10 +282,11 @@ export class PagerUi {
     const rail = this.rail.getBoundingClientRect();
     const left = Math.max(4, Math.min(host.width - rail.width - 4, event.clientX - host.left - this.railOffsetX));
     const top = Math.max(4, Math.min(host.height - rail.height - 4, event.clientY - host.top - this.railOffsetY));
-    this.rail.style.left = `${left}px`;
-    this.rail.style.top = `${top}px`;
-    this.rail.style.right = "auto";
-    this.rail.style.transform = "none";
+    this.rail.setCssProps({
+      "--pdf-pager-rail-left": `${left}px`,
+      "--pdf-pager-rail-top": `${top}px`,
+    });
+    this.rail.addClass("is-placed");
   };
 
   private readonly onRailPointerUp = (event: PointerEvent): void => {
@@ -321,9 +322,6 @@ export class PagerUi {
 
   private readonly resetRailPlacement = (): void => {
     this.clearRailDrag();
-    this.rail.style.left = "";
-    this.rail.style.top = "";
-    this.rail.style.right = "";
-    this.rail.style.transform = "";
+    this.rail.removeClass("is-placed");
   };
 }
