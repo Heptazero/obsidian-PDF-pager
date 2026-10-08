@@ -1,17 +1,31 @@
 import { FileView, Notice, Platform, Plugin, TFile, TFolder, type App } from "obsidian";
-import { clampPage, shouldRecordLocation, type Bookmark, type ReadingState } from "./reading-state";
+import {
+  clampPage, shouldRecordLocation, type Bookmark, type ReadingSession, type ReadingState,
+} from "./reading-state";
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
+import { aggregateReadingSessions, createReadingSession, localDayKey, upsertDailySettlement } from "./reading-log";
+import {
+  READING_LOG_VIEW, ReadingLogView, type SettlementResult,
+} from "./reading-log-view";
 import { StateStore } from "./state-store";
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
+const READING_TICK_MS = 15_000;
+const READING_IDLE_MS = 5 * 60_000;
+const READING_SAVE_MS = 30_000;
 
 interface DisplaySettings {
   version: 2;
   fitMode: "auto" | "page-fit" | "page-width";
   factor: number;
+}
+
+interface PluginData {
+  version: 1;
+  noteLinks: Record<string, string>;
 }
 
 function loadDisplaySettings(app: App): DisplaySettings {
@@ -67,6 +81,11 @@ class PagerSession implements PagerActions {
   private original: { scrollMode: number; spreadMode: number; scaleValue: string | number } | null = null;
   private modeErrorShown = false;
   private settings: DisplaySettings;
+  private readingTimer: number;
+  private reading: ReadingSession | null = null;
+  private readingLastTick = 0;
+  private readingLastActivity = 0;
+  private readingLastSave = 0;
 
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
@@ -89,17 +108,23 @@ class PagerSession implements PagerActions {
       if (pdf && pdf.currentScale < this.minimumScale) pdf.currentScaleValue = this.minimumScale;
     });
   };
-  private readonly onContainerScroll = () => this.scheduleSliceReadout();
+  private readonly onContainerScroll = () => {
+    this.scheduleSliceReadout();
+    if (this.armed && !this.restoring) this.markReadingActivity();
+  };
+  private readonly onPointerDown = () => this.markReadingActivity();
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (this.disposed || !this.isActive()) return;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const target = event.target;
     if (target instanceof HTMLElement && target.matches("input, textarea, select, button, [contenteditable='true']")) return;
     if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      this.markReadingActivity();
       event.preventDefault();
       event.stopPropagation();
       this.previous();
     } else if (event.key === "ArrowRight" || event.key === "PageDown") {
+      this.markReadingActivity();
       event.preventDefault();
       event.stopPropagation();
       this.next();
@@ -111,6 +136,8 @@ class PagerSession implements PagerActions {
     this.ui = new PagerUi(plugin.app, view, this);
     this.ui.setFactor(this.settings.factor);
     view.containerEl.addEventListener("keydown", this.onKeyDown, true);
+    view.containerEl.addEventListener("pointerdown", this.onPointerDown, true);
+    this.readingTimer = window.setInterval(() => this.readingTick(), READING_TICK_MS);
     this.resizeObserver = new ResizeObserver(() => this.reflow());
     this.resizeObserver.observe(view.containerEl);
     void this.ensureAttached();
@@ -198,6 +225,7 @@ class PagerSession implements PagerActions {
         this.armed = true;
         this.restoring = false;
         this.ui.update(this.page, this.pageCount(), this.state);
+        this.markReadingActivity();
       }, 900);
     } catch (error) {
       this.armed = true;
@@ -247,6 +275,7 @@ class PagerSession implements PagerActions {
     this.lastObservedPage = page;
     this.lastObservedPosition = position;
     this.ui.update(page, this.pageCount(), this.state);
+    if (!this.restoring) this.markReadingActivity();
     if (!shouldSave) return;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     const path = this.path;
@@ -257,6 +286,81 @@ class PagerSession implements PagerActions {
         if (this.path === path) { this.state = state; this.ui.update(this.page, this.pageCount(), state); }
       }).catch((error) => new Notice(`PDF 阅读进度保存失败：${String(error)}`));
     }, 550);
+  }
+
+  private readingId(): string {
+    return window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  private markReadingActivity(timestamp = Date.now()): void {
+    if (!this.path || !this.armed || this.restoring || !this.isActive() || document.hidden) return;
+    const day = localDayKey(timestamp);
+    if (this.reading && (timestamp - this.readingLastActivity > READING_IDLE_MS || this.reading.day !== day)) {
+      this.persistReadingSession(true);
+      this.reading = null;
+    }
+    if (!this.reading) {
+      this.reading = createReadingSession(this.readingId(), day, timestamp, this.page);
+      this.readingLastTick = timestamp;
+      this.readingLastSave = timestamp;
+    }
+    this.readingLastActivity = timestamp;
+    this.reading.endPage = this.page;
+    this.reading.minPage = Math.min(this.reading.minPage, this.page);
+    this.reading.maxPage = Math.max(this.reading.maxPage, this.page);
+  }
+
+  private readingTick(timestamp = Date.now()): void {
+    const session = this.reading;
+    if (!session) return;
+    if (!this.path || !this.isActive() || document.hidden || timestamp - this.readingLastActivity > READING_IDLE_MS) {
+      this.persistReadingSession(true);
+      this.reading = null;
+      return;
+    }
+    if (session.day !== localDayKey(timestamp)) {
+      this.persistReadingSession(true);
+      this.reading = null;
+      this.markReadingActivity(timestamp);
+      return;
+    }
+    const elapsed = Math.max(0, Math.min(timestamp - this.readingLastTick, READING_TICK_MS * 1.5));
+    session.durationMs += elapsed;
+    session.endedAt = timestamp;
+    session.updatedAt = timestamp;
+    session.endPage = this.page;
+    session.minPage = Math.min(session.minPage, this.page);
+    session.maxPage = Math.max(session.maxPage, this.page);
+    this.readingLastTick = timestamp;
+    if (timestamp - this.readingLastSave >= READING_SAVE_MS) this.persistReadingSession();
+  }
+
+  private persistReadingSession(force = false): void {
+    if (!this.path || !this.reading || this.reading.durationMs < 5_000) return;
+    if (!force && this.reading.updatedAt - this.readingLastSave < READING_SAVE_MS) return;
+    const path = this.path;
+    const snapshot = { ...this.reading };
+    this.readingLastSave = snapshot.updatedAt;
+    void this.plugin.store.upsertReadingSession(path, snapshot)
+      .then(() => this.plugin.refreshReadingLog())
+      .catch((error) => new Notice(`PDF 阅读时间保存失败：${String(error)}`));
+  }
+
+  syncReadingFocus(): void {
+    if (this.isActive() && !document.hidden) this.markReadingActivity();
+    else {
+      this.persistReadingSession(true);
+      this.reading = null;
+    }
+  }
+
+  async flushReading(): Promise<void> {
+    this.readingTick();
+    if (!this.path || !this.reading || this.reading.durationMs < 5_000) return;
+    const snapshot = { ...this.reading };
+    this.readingLastSave = snapshot.updatedAt;
+    await this.plugin.store.upsertReadingSession(this.path, snapshot);
+    this.plugin.refreshReadingLog();
   }
 
   private applyMode(targetPage?: number, preserveZoom = false): void {
@@ -315,8 +419,8 @@ class PagerSession implements PagerActions {
     }, 180);
   }
 
-  previous(): void { this.navigateSlice(-1); }
-  next(): void { this.navigateSlice(1); }
+  previous(): void { this.markReadingActivity(); this.navigateSlice(-1); }
+  next(): void { this.markReadingActivity(); this.navigateSlice(1); }
 
   private navigateSlice(direction: -1 | 1): void {
     const pdf = this.native?.pdfViewer;
@@ -348,6 +452,7 @@ class PagerSession implements PagerActions {
   goTo(page: number): void {
     const pdf = this.native?.pdfViewer;
     if (!pdf || !Number.isFinite(page)) return;
+    this.markReadingActivity();
     const next = clampPage(page, this.pageCount());
     if (this.reflowPage !== null) this.reflowPage = next;
     this.requestedPosition = 0;
@@ -537,6 +642,7 @@ class PagerSession implements PagerActions {
   }
 
   dispose(): void {
+    this.persistReadingSession(true);
     this.disposed = true;
     this.clearTimers();
     if (this.attachTimer !== null) window.clearTimeout(this.attachTimer);
@@ -546,6 +652,8 @@ class PagerSession implements PagerActions {
     this.native?.eventBus.off("scalechanging", this.onScaleChanging);
     this.native?.pdfViewer.container.removeEventListener("scroll", this.onContainerScroll);
     this.view.containerEl.removeEventListener("keydown", this.onKeyDown, true);
+    this.view.containerEl.removeEventListener("pointerdown", this.onPointerDown, true);
+    window.clearInterval(this.readingTimer);
     this.restoreOriginal();
     this.ui.destroy();
   }
@@ -554,16 +662,26 @@ class PagerSession implements PagerActions {
 export default class PdfPagerPlugin extends Plugin {
   store!: StateStore;
   private sessions = new Map<FileView, PagerSession>();
+  private data: PluginData = { version: 1, noteLinks: {} };
 
-  onload(): void {
+  async onload(): Promise<void> {
+    const loaded: unknown = await this.loadData();
+    if (loaded && typeof loaded === "object") {
+      const noteLinks = (loaded as Partial<PluginData>).noteLinks;
+      if (noteLinks && typeof noteLinks === "object") this.data.noteLinks = { ...noteLinks };
+    }
     this.store = new StateStore(this.app);
+    this.registerView(READING_LOG_VIEW, (leaf) => new ReadingLogView(leaf, this));
+    this.addRibbonIcon("bar-chart-3", "PDF 阅读日志", () => void this.openReadingLog());
     this.app.workspace.onLayoutReady(() => this.scan());
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scan()));
     this.registerEvent(this.app.workspace.on("file-open", () => window.setTimeout(() => this.scan(), 0)));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scan()));
     this.registerEvent(this.app.workspace.on("resize", () => this.reflow()));
     this.registerDomEvent(window, "orientationchange", () => this.reflow());
+    this.registerDomEvent(document, "visibilitychange", () => this.syncReadingFocus());
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      void this.updateNoteLinksForRename(oldPath, file.path, file instanceof TFolder);
       if (!(file instanceof TFolder || (file instanceof TFile && file.extension.toLowerCase() === "pdf"))) return;
       const newPath = file.path;
       const migration = file instanceof TFolder
@@ -604,6 +722,14 @@ export default class PdfPagerPlugin extends Plugin {
       if (!checking) session?.next();
       return !!session;
     } });
+    this.addCommand({ id: "open-reading-log", name: "打开 PDF 阅读日志", callback: () => void this.openReadingLog() });
+    this.addCommand({ id: "settle-today", name: "结算今天的 PDF 阅读", callback: () => {
+      const day = localDayKey();
+      void this.settleReadingDay(day).then((result) => {
+        if (result.unresolved.length) new Notice(`已结算 ${result.settled.length} 本；${result.unresolved.length} 本需要先关联书籍笔记`);
+        else new Notice(`已结算 ${result.settled.length} 本书`);
+      }).catch((error) => new Notice(`PDF 阅读结算失败：${String(error)}`));
+    } });
   }
 
   private activeSession(): PagerSession | null {
@@ -621,9 +747,96 @@ export default class PdfPagerPlugin extends Plugin {
     for (const [view, session] of this.sessions) {
       if (!views.has(view)) { session.dispose(); this.sessions.delete(view); }
     }
+    this.syncReadingFocus();
   }
 
   private reflow(): void { for (const session of this.sessions.values()) session.reflow(); }
+
+  private syncReadingFocus(): void {
+    for (const session of this.sessions.values()) session.syncReadingFocus();
+  }
+
+  private async flushReading(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((session) => session.flushReading()));
+  }
+
+  private async openReadingLog(): Promise<void> {
+    await this.flushReading();
+    const existing = this.app.workspace.getLeavesOfType(READING_LOG_VIEW)[0];
+    const leaf = existing ?? this.app.workspace.getLeaf("tab");
+    if (!existing) await leaf.setViewState({ type: READING_LOG_VIEW, active: true });
+    await this.app.workspace.revealLeaf(leaf);
+    this.refreshReadingLog();
+  }
+
+  refreshReadingLog(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(READING_LOG_VIEW)) {
+      if (leaf.view instanceof ReadingLogView) void leaf.view.refresh();
+    }
+  }
+
+  async resolveReadingNote(pdfPath: string): Promise<TFile | null> {
+    const linkedPath = this.data.noteLinks[pdfPath];
+    const linked = linkedPath ? this.app.vault.getAbstractFileByPath(linkedPath) : null;
+    if (linked instanceof TFile && linked.extension.toLowerCase() === "md") return linked;
+
+    const candidates: TFile[] = [];
+    for (const [source, targets] of Object.entries(this.app.metadataCache.resolvedLinks)) {
+      if (!targets[pdfPath]) continue;
+      const file = this.app.vault.getAbstractFileByPath(source);
+      if (file instanceof TFile && file.extension.toLowerCase() === "md") candidates.push(file);
+    }
+    if (candidates.length === 0) return null;
+    const withLog: TFile[] = [];
+    for (const candidate of candidates) {
+      if (/^##\s+log\s*$/im.test(await this.app.vault.cachedRead(candidate))) withLog.push(candidate);
+    }
+    if (withLog.length === 1) return withLog[0];
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  async linkReadingNote(pdfPath: string, note: TFile): Promise<void> {
+    this.data.noteLinks[pdfPath] = note.path;
+    await this.saveData(this.data);
+  }
+
+  async settleReadingDay(day: string): Promise<SettlementResult> {
+    await this.flushReading();
+    const summaries = aggregateReadingSessions(await this.store.readingSessions()).filter((summary) => summary.day === day);
+    const settled: TFile[] = [];
+    const unresolved = [];
+    for (const summary of summaries) {
+      const note = await this.resolveReadingNote(summary.pdfPath);
+      if (!note) { unresolved.push(summary); continue; }
+      await this.app.vault.process(note, (content) => upsertDailySettlement(content, summary).content);
+      settled.push(note);
+    }
+    this.refreshReadingLog();
+    return { settled, unresolved };
+  }
+
+  async openReadingNote(note: TFile): Promise<void> {
+    await this.app.workspace.openLinkText(`${note.path}#log`, note.path, false);
+  }
+
+  private async updateNoteLinksForRename(oldPath: string, newPath: string, folder: boolean): Promise<void> {
+    let changed = false;
+    const next: Record<string, string> = {};
+    for (const [pdfPath, notePath] of Object.entries(this.data.noteLinks)) {
+      const renamedPdf = pdfPath === oldPath || (folder && pdfPath.startsWith(oldPath + "/"))
+        ? newPath + pdfPath.slice(oldPath.length)
+        : pdfPath;
+      const renamedNote = notePath === oldPath || (folder && notePath.startsWith(oldPath + "/"))
+        ? newPath + notePath.slice(oldPath.length)
+        : notePath;
+      if (renamedPdf !== pdfPath || renamedNote !== notePath) changed = true;
+      next[renamedPdf] = renamedNote;
+    }
+    if (changed) {
+      this.data.noteLinks = next;
+      await this.saveData(this.data);
+    }
+  }
 
   onunload(): void {
     for (const session of this.sessions.values()) session.dispose();

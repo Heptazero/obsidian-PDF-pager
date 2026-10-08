@@ -13,12 +13,27 @@ export interface Bookmark {
   deleted?: boolean;
 }
 
+export interface ReadingSession {
+  id: string;
+  /** Local calendar day on the device that recorded the session. */
+  day: string;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  startPage: number;
+  endPage: number;
+  minPage: number;
+  maxPage: number;
+  updatedAt: number;
+}
+
 export interface DeviceRecord {
   version: 1;
   pdfPath: string;
   deviceId: string;
   progress?: Progress;
   bookmarks: Record<string, Bookmark>;
+  sessions?: Record<string, ReadingSession>;
 }
 
 export interface ReadingState {

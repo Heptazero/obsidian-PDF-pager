@@ -79,3 +79,25 @@ test("legacy vault records are loaded and copied into the plugin config folder",
   assert.equal((await store.load(path)).progress?.page, 6);
   assert.equal(adapter.files.has(`.obsidian/plugins/pdf-pager-hz/records/${pathKey(path)}-${device}.json`), true);
 });
+
+test("reading sessions stay per-device and follow PDF renames", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
+  storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
+  const first = new StateStore(app);
+  await first.upsertReadingSession("资料/书.pdf", {
+    id: "a-session", day: "2026-10-08", startedAt: 100, endedAt: 200, durationMs: 100,
+    startPage: 1, endPage: 2, minPage: 1, maxPage: 2, updatedAt: 200,
+  });
+  storage.set("pdf-pager-hz:device:test-vault", "device-bbbbbbbb");
+  const second = new StateStore(app);
+  await second.upsertReadingSession("资料/书.pdf", {
+    id: "b-session", day: "2026-10-08", startedAt: 300, endedAt: 400, durationMs: 100,
+    startPage: 3, endPage: 4, minPage: 3, maxPage: 4, updatedAt: 400,
+  });
+  assert.deepEqual((await first.readingSessions()).map((item) => item.id), ["a-session", "b-session"]);
+  await first.rename("资料/书.pdf", "资料/新书.pdf");
+  const renamed = await second.readingSessions();
+  assert.equal(renamed.every((item) => item.pdfPath === "资料/新书.pdf"), true);
+});

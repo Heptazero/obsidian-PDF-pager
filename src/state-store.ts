@@ -1,5 +1,7 @@
 import type { App } from "obsidian";
-import { mergeRecords, pathKey, type Bookmark, type DeviceRecord, type ReadingState } from "./reading-state.ts";
+import {
+  mergeRecords, pathKey, type Bookmark, type DeviceRecord, type ReadingSession, type ReadingState,
+} from "./reading-state.ts";
 
 const PLUGIN_ID = "pdf-pager-hz";
 const LEGACY_ROOT = "99_assets/plugin-data/pdf-pager";
@@ -25,14 +27,30 @@ function parseRecord(raw: string): DeviceRecord | null {
     if (!value || typeof value !== "object") return null;
     const record = value as Partial<DeviceRecord>;
     if (record.version !== 1 || typeof record.pdfPath !== "string" || typeof record.deviceId !== "string") return null;
-    return { ...record, version: 1, pdfPath: record.pdfPath, deviceId: record.deviceId, bookmarks: record.bookmarks ?? {} };
+    return {
+      ...record,
+      version: 1,
+      pdfPath: record.pdfPath,
+      deviceId: record.deviceId,
+      bookmarks: record.bookmarks ?? {},
+      sessions: record.sessions ?? {},
+    };
   } catch {
     return null;
   }
 }
 
 function latestTimestamp(record: DeviceRecord): number {
-  return Math.max(record.progress?.updatedAt ?? 0, ...Object.values(record.bookmarks).map((item) => item.updatedAt));
+  return Math.max(
+    record.progress?.updatedAt ?? 0,
+    ...Object.values(record.bookmarks).map((item) => item.updatedAt),
+    ...Object.values(record.sessions ?? {}).map((item) => item.updatedAt),
+  );
+}
+
+export interface StoredReadingSession extends ReadingSession {
+  pdfPath: string;
+  deviceId: string;
 }
 
 export class StateStore {
@@ -81,6 +99,26 @@ export class StateStore {
     return [...newestByDevice.values()];
   }
 
+  async readingSessions(): Promise<StoredReadingSession[]> {
+    const newest = new Map<string, StoredReadingSession>();
+    for (const root of [this.root, LEGACY_ROOT]) {
+      if (!await this.app.vault.adapter.exists(root)) continue;
+      const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
+      for (const file of files) {
+        try {
+          const record = parseRecord(await this.app.vault.adapter.read(file));
+          if (!record) continue;
+          for (const session of Object.values(record.sessions ?? {})) {
+            const stored = { ...session, pdfPath: record.pdfPath, deviceId: record.deviceId };
+            const previous = newest.get(session.id);
+            if (!previous || stored.updatedAt > previous.updatedAt) newest.set(session.id, stored);
+          }
+        } catch { /* Ignore unreadable sidecars. */ }
+      }
+    }
+    return [...newest.values()].sort((a, b) => a.startedAt - b.startedAt);
+  }
+
   async load(pdfPath: string): Promise<ReadingState> {
     const records = await this.records(pdfPath);
     const current = records.find((record) => record.deviceId === this.device);
@@ -99,7 +137,7 @@ export class StateStore {
     const cached = this.own.get(pdfPath);
     if (cached) return cached;
     await this.load(pdfPath);
-    return this.own.get(pdfPath) ?? { version: 1, pdfPath, deviceId: this.device, bookmarks: {} };
+    return this.own.get(pdfPath) ?? { version: 1, pdfPath, deviceId: this.device, bookmarks: {}, sessions: {} };
   }
 
   private serialize<T>(pdfPath: string, job: () => Promise<T>): Promise<T> {
@@ -141,6 +179,14 @@ export class StateStore {
     });
   }
 
+  async upsertReadingSession(pdfPath: string, session: ReadingSession): Promise<void> {
+    await this.edit(pdfPath, (record) => {
+      record.sessions ??= {};
+      const previous = record.sessions[session.id];
+      if (!previous || session.updatedAt >= previous.updatedAt) record.sessions[session.id] = session;
+    });
+  }
+
   async rename(oldPath: string, newPath: string): Promise<void> {
     await this.pending.get(oldPath)?.catch(() => undefined);
     const records = await this.records(oldPath);
@@ -157,6 +203,10 @@ export class StateStore {
           renamed.bookmarks = { ...existing.bookmarks };
           for (const [id, item] of Object.entries(record.bookmarks)) {
             if (!renamed.bookmarks[id] || item.updatedAt > renamed.bookmarks[id].updatedAt) renamed.bookmarks[id] = item;
+          }
+          renamed.sessions = { ...existing.sessions };
+          for (const [id, item] of Object.entries(record.sessions ?? {})) {
+            if (!renamed.sessions[id] || item.updatedAt > renamed.sessions[id].updatedAt) renamed.sessions[id] = item;
           }
         }
       } catch { /* No destination record yet. */ }
