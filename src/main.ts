@@ -1,6 +1,6 @@
 import { FileView, Notice, Platform, Plugin, TFile, TFolder, type App } from "obsidian";
 import {
-  clampPage, shouldRecordLocation, type Bookmark, type ReadingSession, type ReadingState,
+  clampPage, shouldRecordLocation, shouldRestoreProgress, type Bookmark, type ReadingSession, type ReadingState,
 } from "./reading-state";
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
@@ -9,23 +9,20 @@ import {
   READING_LOG_VIEW, ReadingLogView, type SettlementResult,
 } from "./reading-log-view";
 import { StateStore } from "./state-store";
+import {
+  PdfPagerSettingTab, normalizeRecordFolder, type PdfPagerSettings, type PdfPagerSettingsController,
+} from "./settings";
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 const READING_TICK_MS = 15_000;
-const READING_IDLE_MS = 5 * 60_000;
 const READING_SAVE_MS = 30_000;
 
 interface DisplaySettings {
   version: 2;
   fitMode: "auto" | "page-fit" | "page-width";
   factor: number;
-}
-
-interface PluginData {
-  version: 1;
-  noteLinks: Record<string, string>;
 }
 
 function loadDisplaySettings(app: App): DisplaySettings {
@@ -86,6 +83,7 @@ class PagerSession implements PagerActions {
   private readingLastTick = 0;
   private readingLastActivity = 0;
   private readingLastSave = 0;
+  private userInteractedWhileRestoring = false;
 
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
@@ -112,18 +110,23 @@ class PagerSession implements PagerActions {
     this.scheduleSliceReadout();
     if (this.armed && !this.restoring) this.markReadingActivity();
   };
-  private readonly onPointerDown = () => this.markReadingActivity();
+  private readonly onPointerDown = () => {
+    if (!this.armed) this.userInteractedWhileRestoring = true;
+    this.markReadingActivity();
+  };
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (this.disposed || !this.isActive()) return;
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const target = event.target;
     if (target instanceof HTMLElement && target.matches("input, textarea, select, button, [contenteditable='true']")) return;
     if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      if (!this.armed) this.userInteractedWhileRestoring = true;
       this.markReadingActivity();
       event.preventDefault();
       event.stopPropagation();
       this.previous();
     } else if (event.key === "ArrowRight" || event.key === "PageDown") {
+      if (!this.armed) this.userInteractedWhileRestoring = true;
       this.markReadingActivity();
       event.preventDefault();
       event.stopPropagation();
@@ -196,6 +199,7 @@ class PagerSession implements PagerActions {
     this.lastObservedPage = this.page;
     this.lastObservedPosition = 0;
     this.requestedPosition = null;
+    this.userInteractedWhileRestoring = false;
     this.state = { bookmarks: [] };
     this.baseScale = this.minimumScale = 0;
     this.ui.setFile(file.path, this.state, doc.numPages);
@@ -213,10 +217,12 @@ class PagerSession implements PagerActions {
       this.restoreTimer = window.setTimeout(() => {
         if (!this.isCurrent(path, doc, generation) || !this.native) return;
         const pdf = this.native.pdfViewer;
-        // Obsidian applies #page links asynchronously. Let explicit navigation win.
-        if (!hasExplicitPageTarget(this.view) && pdf.currentPageNumber === 1 && this.lastObservedPage === 1 && state.progress) {
-          pdf.currentPageNumber = clampPage(state.progress.page, this.pageCount());
-          this.position = clampPosition(state.progress.position);
+        // Explicit #page links and navigation performed while loading still win.
+        const savedProgress = state.progress;
+        if (shouldRestoreProgress(hasExplicitPageTarget(this.view), this.userInteractedWhileRestoring, savedProgress)) {
+          this.requestedPosition = clampPosition(savedProgress!.position);
+          this.position = this.requestedPosition;
+          pdf.currentPageNumber = clampPage(savedProgress!.page, this.pageCount());
         }
         this.page = pdf.currentPageNumber;
         this.placePage(this.page);
@@ -295,7 +301,7 @@ class PagerSession implements PagerActions {
   private markReadingActivity(timestamp = Date.now()): void {
     if (!this.path || !this.armed || this.restoring || !this.isActive() || document.hidden) return;
     const day = localDayKey(timestamp);
-    if (this.reading && (timestamp - this.readingLastActivity > READING_IDLE_MS || this.reading.day !== day)) {
+    if (this.reading && (timestamp - this.readingLastActivity > this.plugin.readingIdleMs || this.reading.day !== day)) {
       this.persistReadingSession(true);
       this.reading = null;
     }
@@ -313,7 +319,7 @@ class PagerSession implements PagerActions {
   private readingTick(timestamp = Date.now()): void {
     const session = this.reading;
     if (!session) return;
-    if (!this.path || !this.isActive() || document.hidden || timestamp - this.readingLastActivity > READING_IDLE_MS) {
+    if (!this.path || !this.isActive() || document.hidden || timestamp - this.readingLastActivity > this.plugin.readingIdleMs) {
       this.persistReadingSession(true);
       this.reading = null;
       return;
@@ -419,8 +425,17 @@ class PagerSession implements PagerActions {
     }, 180);
   }
 
-  previous(): void { this.markReadingActivity(); this.navigateSlice(-1); }
-  next(): void { this.markReadingActivity(); this.navigateSlice(1); }
+  previous(): void {
+    if (!this.armed) this.userInteractedWhileRestoring = true;
+    this.markReadingActivity();
+    this.navigateSlice(-1);
+  }
+
+  next(): void {
+    if (!this.armed) this.userInteractedWhileRestoring = true;
+    this.markReadingActivity();
+    this.navigateSlice(1);
+  }
 
   private navigateSlice(direction: -1 | 1): void {
     const pdf = this.native?.pdfViewer;
@@ -452,6 +467,7 @@ class PagerSession implements PagerActions {
   goTo(page: number): void {
     const pdf = this.native?.pdfViewer;
     if (!pdf || !Number.isFinite(page)) return;
+    if (!this.armed) this.userInteractedWhileRestoring = true;
     this.markReadingActivity();
     const next = clampPage(page, this.pageCount());
     if (this.reflowPage !== null) this.reflowPage = next;
@@ -659,18 +675,29 @@ class PagerSession implements PagerActions {
   }
 }
 
-export default class PdfPagerPlugin extends Plugin {
+export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsController {
   store!: StateStore;
   private sessions = new Map<FileView, PagerSession>();
-  private data: PluginData = { version: 1, noteLinks: {} };
+  private data!: PdfPagerSettings;
+
+  get readingIdleMs(): number { return this.data.idleMinutes * 60_000; }
 
   async onload(): Promise<void> {
     const loaded: unknown = await this.loadData();
-    if (loaded && typeof loaded === "object") {
-      const noteLinks = (loaded as Partial<PluginData>).noteLinks;
-      if (noteLinks && typeof noteLinks === "object") this.data.noteLinks = { ...noteLinks };
-    }
-    this.store = new StateStore(this.app);
+    const saved = loaded && typeof loaded === "object" ? loaded as Partial<PdfPagerSettings> : {};
+    const defaultFolder = `${this.app.vault.configDir}/plugins/${this.manifest.id}/records`;
+    let recordFolder = defaultFolder;
+    try { recordFolder = normalizeRecordFolder(saved.recordFolder ?? "", defaultFolder); }
+    catch { recordFolder = defaultFolder; }
+    const idleMinutes = [5, 10, 15, 30].includes(saved.idleMinutes ?? 0) ? saved.idleMinutes! : 5;
+    this.data = {
+      version: 2,
+      noteLinks: saved.noteLinks && typeof saved.noteLinks === "object" ? { ...saved.noteLinks } : {},
+      recordFolder,
+      idleMinutes,
+    };
+    this.store = new StateStore(this.app, recordFolder);
+    this.addSettingTab(new PdfPagerSettingTab(this.app, this));
     this.registerView(READING_LOG_VIEW, (leaf) => new ReadingLogView(leaf, this));
     this.addRibbonIcon("bar-chart-3", "PDF 阅读日志", () => void this.openReadingLog());
     this.app.workspace.onLayoutReady(() => this.scan());
@@ -758,6 +785,26 @@ export default class PdfPagerPlugin extends Plugin {
 
   private async flushReading(): Promise<void> {
     await Promise.all([...this.sessions.values()].map((session) => session.flushReading()));
+  }
+
+  getPdfPagerSettings(): PdfPagerSettings { return this.data; }
+
+  async updateRecordFolder(path: string): Promise<void> {
+    const fallback = `${this.app.vault.configDir}/plugins/${this.manifest.id}/records`;
+    const normalized = normalizeRecordFolder(path, fallback);
+    if (normalized === this.data.recordFolder) return;
+    await this.flushReading();
+    const copied = await this.store.setRoot(normalized);
+    this.data.recordFolder = normalized;
+    await this.saveData(this.data);
+    this.refreshReadingLog();
+    new Notice(`PDF 阅读记录目录已改为 ${normalized}，已复制 ${copied} 份设备记录`);
+  }
+
+  async updateIdleMinutes(minutes: number): Promise<void> {
+    if (![5, 10, 15, 30].includes(minutes)) throw new Error("无操作暂停时间无效");
+    this.data.idleMinutes = minutes;
+    await this.saveData(this.data);
   }
 
   private async openReadingLog(): Promise<void> {

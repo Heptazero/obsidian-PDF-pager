@@ -48,6 +48,28 @@ function latestTimestamp(record: DeviceRecord): number {
   );
 }
 
+function mergeDeviceRecords(first: DeviceRecord, second: DeviceRecord): DeviceRecord {
+  const merged: DeviceRecord = {
+    ...first,
+    pdfPath: second.pdfPath,
+    bookmarks: { ...first.bookmarks },
+    sessions: { ...first.sessions },
+  };
+  if (second.progress && (!merged.progress || second.progress.updatedAt > merged.progress.updatedAt)) {
+    merged.progress = second.progress;
+  }
+  for (const [id, bookmark] of Object.entries(second.bookmarks ?? {})) {
+    if (!merged.bookmarks[id] || bookmark.updatedAt > merged.bookmarks[id].updatedAt) merged.bookmarks[id] = bookmark;
+  }
+  for (const [id, session] of Object.entries(second.sessions ?? {})) {
+    if (!merged.sessions?.[id] || session.updatedAt > merged.sessions[id].updatedAt) {
+      merged.sessions ??= {};
+      merged.sessions[id] = session;
+    }
+  }
+  return merged;
+}
+
 export interface StoredReadingSession extends ReadingSession {
   pdfPath: string;
   deviceId: string;
@@ -56,28 +78,41 @@ export interface StoredReadingSession extends ReadingSession {
 export class StateStore {
   private readonly device: string;
   private readonly app: App;
-  private readonly root: string;
+  private root: string;
+  private readonly defaultRoot: string;
   private own = new Map<string, DeviceRecord>();
   private pending = new Map<string, Promise<unknown>>();
 
-  constructor(app: App) {
+  constructor(app: App, root?: string) {
     this.app = app;
     this.device = deviceId(app);
-    this.root = `${app.vault.configDir}/plugins/${PLUGIN_ID}/records`;
+    this.defaultRoot = `${app.vault.configDir}/plugins/${PLUGIN_ID}/records`;
+    this.root = root ?? this.defaultRoot;
+  }
+
+  private readRoots(): string[] {
+    return [...new Set([this.root, this.defaultRoot, LEGACY_ROOT])];
   }
 
   private filePath(pdfPath: string, device = this.device, root = this.root): string {
     return `${root}/${pathKey(pdfPath)}-${device}.json`;
   }
 
+  private async ensureFolder(path: string): Promise<void> {
+    let current = "";
+    for (const part of path.split("/").filter(Boolean)) {
+      current = current ? `${current}/${part}` : part;
+      if (!await this.app.vault.adapter.exists(current)) await this.app.vault.adapter.mkdir(current);
+    }
+  }
+
   private async ensureRoot(): Promise<void> {
-    // Adapter access is required because the plugin's config folder is hidden from the Vault API.
-    if (!await this.app.vault.adapter.exists(this.root)) await this.app.vault.adapter.mkdir(this.root);
+    await this.ensureFolder(this.root);
   }
 
   private async records(pdfPath: string): Promise<DeviceRecord[]> {
     const prefix = `${pathKey(pdfPath)}-`;
-    const batches = await Promise.all([this.root, LEGACY_ROOT].map(async (root) => {
+    const batches = await Promise.all(this.readRoots().map(async (root) => {
       if (!await this.app.vault.adapter.exists(root)) return [];
       const list = await this.app.vault.adapter.list(root);
       const files = list.files.filter((file) => file.slice(root.length + 1).startsWith(prefix) && file.endsWith(".json"));
@@ -94,14 +129,14 @@ export class StateStore {
     for (const record of batches.flat()) {
       if (!record) continue;
       const current = newestByDevice.get(record.deviceId);
-      if (!current || latestTimestamp(record) > latestTimestamp(current)) newestByDevice.set(record.deviceId, record);
+      newestByDevice.set(record.deviceId, current ? mergeDeviceRecords(current, record) : record);
     }
     return [...newestByDevice.values()];
   }
 
   async readingSessions(): Promise<StoredReadingSession[]> {
     const newest = new Map<string, StoredReadingSession>();
-    for (const root of [this.root, LEGACY_ROOT]) {
+    for (const root of this.readRoots()) {
       if (!await this.app.vault.adapter.exists(root)) continue;
       const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
       for (const file of files) {
@@ -153,7 +188,8 @@ export class StateStore {
   private async edit(pdfPath: string, change: (record: DeviceRecord, now: number) => void): Promise<ReadingState> {
     return this.serialize(pdfPath, async () => {
       const record = await this.localRecord(pdfPath);
-      const now = Math.max(Date.now(), latestTimestamp(record) + 1);
+      const peers = await this.records(pdfPath);
+      const now = Math.max(Date.now(), latestTimestamp(record) + 1, ...peers.map((peer) => latestTimestamp(peer) + 1));
       change(record, now);
       await this.ensureRoot();
       await this.app.vault.adapter.write(this.filePath(pdfPath), JSON.stringify(record, null, 2) + "\n");
@@ -180,11 +216,52 @@ export class StateStore {
   }
 
   async upsertReadingSession(pdfPath: string, session: ReadingSession): Promise<void> {
-    await this.edit(pdfPath, (record) => {
+    await this.edit(pdfPath, (record, now) => {
       record.sessions ??= {};
       const previous = record.sessions[session.id];
-      if (!previous || session.updatedAt >= previous.updatedAt) record.sessions[session.id] = session;
+      const next = { ...session, updatedAt: Math.max(session.updatedAt, now) };
+      if (!previous || next.updatedAt >= previous.updatedAt) record.sessions[session.id] = next;
     });
+  }
+
+  async setRoot(root: string): Promise<number> {
+    await Promise.all([...this.pending.values()].map((pending) => pending.catch(() => undefined)));
+    if (root === this.root) return 0;
+    const sourceRoots = this.readRoots();
+    const records = new Map<string, DeviceRecord>();
+    for (const source of sourceRoots) {
+      if (!await this.app.vault.adapter.exists(source)) continue;
+      for (const file of (await this.app.vault.adapter.list(source)).files.filter((path) => path.endsWith(".json"))) {
+        try {
+          const record = parseRecord(await this.app.vault.adapter.read(file));
+          if (!record) continue;
+          const key = `${record.pdfPath.normalize("NFC")}\0${record.deviceId}`;
+          const current = records.get(key);
+          records.set(key, current ? mergeDeviceRecords(current, record) : record);
+        } catch { /* Ignore unreadable sidecars. */ }
+      }
+    }
+    const previousRoot = this.root;
+    const nextOwn = new Map<string, DeviceRecord>();
+    this.root = root;
+    try {
+      await this.ensureRoot();
+      for (const record of records.values()) {
+        const destination = this.filePath(record.pdfPath, record.deviceId);
+        let merged = record;
+        try {
+          const existing = parseRecord(await this.app.vault.adapter.read(destination));
+          if (existing) merged = mergeDeviceRecords(existing, record);
+        } catch { /* Destination does not exist yet. */ }
+        await this.app.vault.adapter.write(destination, JSON.stringify(merged, null, 2) + "\n");
+        if (record.deviceId === this.device) nextOwn.set(record.pdfPath, merged);
+      }
+      for (const [pdfPath, record] of nextOwn) this.own.set(pdfPath, record);
+      return records.size;
+    } catch (error) {
+      this.root = previousRoot;
+      throw error;
+    }
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
@@ -199,21 +276,15 @@ export class StateStore {
       try {
         const existing = parseRecord(await this.app.vault.adapter.read(to));
         if (existing?.pdfPath === newPath) {
-          renamed.progress = mergeRecords([existing, renamed]).progress;
-          renamed.bookmarks = { ...existing.bookmarks };
-          for (const [id, item] of Object.entries(record.bookmarks)) {
-            if (!renamed.bookmarks[id] || item.updatedAt > renamed.bookmarks[id].updatedAt) renamed.bookmarks[id] = item;
-          }
-          renamed.sessions = { ...existing.sessions };
-          for (const [id, item] of Object.entries(record.sessions ?? {})) {
-            if (!renamed.sessions[id] || item.updatedAt > renamed.sessions[id].updatedAt) renamed.sessions[id] = item;
-          }
+          Object.assign(renamed, mergeDeviceRecords(existing, renamed));
         }
       } catch { /* No destination record yet. */ }
       await this.app.vault.adapter.write(to, JSON.stringify(renamed, null, 2) + "\n");
       if (from !== to && await this.app.vault.adapter.exists(from)) await this.app.vault.adapter.remove(from);
-      const legacyFrom = this.filePath(oldPath, record.deviceId, LEGACY_ROOT);
-      if (await this.app.vault.adapter.exists(legacyFrom)) await this.app.vault.adapter.remove(legacyFrom);
+      for (const root of this.readRoots()) {
+        const source = this.filePath(oldPath, record.deviceId, root);
+        if (source !== to && await this.app.vault.adapter.exists(source)) await this.app.vault.adapter.remove(source);
+      }
       if (record.deviceId === this.device) this.own.set(newPath, renamed);
     }
     this.own.delete(oldPath);
@@ -221,7 +292,7 @@ export class StateStore {
 
   async renamePrefix(oldFolder: string, newFolder: string): Promise<void> {
     const paths = new Set<string>();
-    for (const root of [this.root, LEGACY_ROOT]) {
+    for (const root of this.readRoots()) {
       if (!await this.app.vault.adapter.exists(root)) continue;
       const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
       for (const file of files) {

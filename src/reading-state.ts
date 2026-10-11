@@ -94,3 +94,7 @@ export function shouldRecordLocation(
   return focused && !restoring && armed && Number.isInteger(page) && page > 0
     && (page !== lastPage || Math.abs(position - lastPosition) > 0.001);
 }
+
+export function shouldRestoreProgress(explicitTarget: boolean, userInteracted: boolean, progress?: Progress): boolean {
+  return !!progress && !explicitTarget && !userInteracted;
+}

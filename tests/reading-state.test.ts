@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clampPage, mergeRecords, pathKey, shouldRecordPage, type DeviceRecord } from "../src/reading-state.ts";
+import {
+  clampPage, mergeRecords, pathKey, shouldRecordPage, shouldRestoreProgress, type DeviceRecord,
+} from "../src/reading-state.ts";
 
 test("inactive and restored pages never overwrite a reading session", () => {
   assert.equal(shouldRecordPage(false, false, true, 3, 2), false);
@@ -29,4 +31,12 @@ test("path hash normalizes macOS filenames and page stays in range", () => {
   assert.equal(pathKey("论文/e\u0301.pdf"), pathKey("论文/é.pdf"));
   assert.equal(clampPage(999, 25), 25);
   assert.equal(clampPage(0, 25), 1);
+});
+
+test("synced progress overrides native cached position but explicit links and user navigation win", () => {
+  const progress = { page: 42, position: 0.5, updatedAt: 100 };
+  assert.equal(shouldRestoreProgress(false, false, progress), true);
+  assert.equal(shouldRestoreProgress(true, false, progress), false);
+  assert.equal(shouldRestoreProgress(false, true, progress), false);
+  assert.equal(shouldRestoreProgress(false, false), false);
 });

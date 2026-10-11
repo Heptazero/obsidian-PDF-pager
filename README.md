@@ -9,7 +9,7 @@ Read PDFs page by page in Obsidian, with mobile landscape paging, resume positio
 - Provides compact mobile controls, keyboard paging, bookmarks, reading progress, and a minimum-width zoom floor.
 - Records active reading sessions per device and provides a foldable daily log with a color-coded weekly chart.
 - Manually settles a day's total time and page range into the linked book note; settling again updates the same row.
-- Stores reading records per device inside the vault configuration folder so synced devices do not overwrite one another's progress.
+- Stores reading records per device and supports a custom vault-relative records folder for third-party sync tools.
 - Works offline and contains no network requests, accounts, advertisements, or telemetry.
 
 The plugin uses Obsidian's internal PDF.js viewer interface. An Obsidian update may require a compatibility update to this plugin.
@@ -27,12 +27,12 @@ The plugin uses Obsidian's internal PDF.js viewer interface. An Obsidian update 
 - 宽度滑块设置页面的最小显示宽度（当前适配方式为 100%）。双指可以继续放大，缩小到这个下限即停止；拖动滑块时保留高于下限的双指放大倍率。“适合整页”和“适合宽度”会重置到新的适配基准。移动端宽度面板会居中并隔离边缘拖动，避免误展开 Obsidian 侧边栏。
 - 普通打开 PDF 时恢复最近一次阅读页；显式 PDF 页码链接优先。
 - 仅在聚焦的 PDF 标签页实际翻页后保存进度，避免后台标签页关闭覆盖记录。
-- 自动记录聚焦 PDF 的阅读时段；切换标签页、应用进入后台或连续 5 分钟无操作时暂停，避免把忘记关闭的 PDF 算成阅读时间。
-- 左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。今天、昨天和本周均可折叠；本周柱状图按书籍使用不同颜色，书籍卡片可展开查看每次阅读的时间、时长和页码。
+- 自动记录聚焦 PDF 的阅读时段；切换标签页或应用进入后台时暂停。默认连续 5 分钟无操作后暂停，也可在设置中改为 10、15 或 30 分钟。
+- 左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。今天、昨天和本周均可折叠；本周柱状图按书籍使用不同颜色，书籍卡片可展开查看每次阅读的时间、时长和起止位置。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
 - “结算今天”会把当天总时长和起止页写入关联书籍笔记的 `## log`。例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；之后继续阅读时再次结算，会覆盖当天总数并保留下面缩进的感想。
 - 插件会优先查找引用当前 PDF 的书籍笔记。无法唯一确定时，在日志卡片点击“关联书籍笔记”选择一次；关联关系保存在插件 `data.json` 中。
 
-进度、书签和原始阅读时段按 PDF、按设备分别存放在 vault 配置目录的 `plugins/pdf-pager-hz/records/*.json`（默认位于 `.obsidian/plugins/pdf-pager-hz/records/`），读取时合并。同步软件需要包含 vault 配置目录和这些 JSON 文件。两台设备的时段会分别保留；等待同步后再次结算即可用最新合计覆盖原结算行。同时离线阅读同一 PDF 时，阅读进度以设备记录的时间戳较新者为准，设备时钟严重不一致会影响判断。从 `0.1.7` 起，插件会自动读取并迁移旧版 `99_assets/plugin-data/pdf-pager/` 中当前设备的记录。
+进度、书签和原始阅读时段按 PDF、按设备分别存成 JSON，读取时合并。默认目录是 `.obsidian/plugins/pdf-pager-hz/records/`；可在 PDF Pager 设置中改成任意 Vault 内文件夹，例如 `99_assets/plugin-data/reading-records`。修改目录时会把已发现的旧记录复制过去，不删除原文件。两台设备必须设置相同目录，并让同步软件包含该目录；等待同步后重新打开 PDF 或再次结算即可使用最新数据。设备写入新进度时会先读取已同步记录并生成更高版本时间，减少设备时钟偏差导致旧进度获胜的问题。从 `0.1.7` 起，插件仍兼容旧版 `99_assets/plugin-data/pdf-pager/` 中的记录。
 
 本插件使用 Obsidian 未公开的 PDF.js 阅读器接口。Obsidian 更新后，如单页模式或页码获取失效，需要调整 `src/native-viewer.ts`。
 

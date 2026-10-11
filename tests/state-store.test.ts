@@ -7,6 +7,7 @@ import { StateStore } from "../src/state-store.ts";
 class MemoryAdapter {
   files = new Map<string, string>();
   folders = new Set<string>();
+  failWritePrefix?: string;
   async exists(path: string): Promise<boolean> { return this.files.has(path) || this.folders.has(path); }
   async mkdir(path: string): Promise<void> { this.folders.add(path); }
   async list(path: string): Promise<{ files: string[]; folders: string[] }> {
@@ -17,7 +18,10 @@ class MemoryAdapter {
     if (value === undefined) throw new Error("missing file");
     return value;
   }
-  async write(path: string, value: string): Promise<void> { this.files.set(path, value); }
+  async write(path: string, value: string): Promise<void> {
+    if (this.failWritePrefix && path.startsWith(this.failWritePrefix)) throw new Error("write failed");
+    this.files.set(path, value);
+  }
   async remove(path: string): Promise<void> { this.files.delete(path); }
 }
 
@@ -100,4 +104,64 @@ test("reading sessions stay per-device and follow PDF renames", async () => {
   await first.rename("资料/书.pdf", "资料/新书.pdf");
   const renamed = await second.readingSessions();
   assert.equal(renamed.every((item) => item.pdfPath === "资料/新书.pdf"), true);
+});
+
+test("custom record folder receives a merged copy without deleting the default records", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
+  storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
+  const store = new StateStore(app);
+  await store.recordProgress("资料/同步书.pdf", 12, 0.4);
+  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${pathKey("资料/同步书.pdf")}-device-aaaaaaaa.json`;
+  assert.equal(adapter.files.has(defaultFile), true);
+
+  const copied = await store.setRoot("99_assets/sync/pdf-pager");
+  const customFile = `99_assets/sync/pdf-pager/${pathKey("资料/同步书.pdf")}-device-aaaaaaaa.json`;
+  assert.equal(copied, 1);
+  assert.equal(adapter.files.has(defaultFile), true);
+  assert.equal(adapter.files.has(customFile), true);
+  assert.equal((await store.load("资料/同步书.pdf")).progress?.page, 12);
+});
+
+test("a failed folder migration keeps subsequent writes in the previous record folder", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
+  storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
+  const store = new StateStore(app);
+  const path = "资料/迁移失败.pdf";
+  await store.recordProgress(path, 4);
+
+  adapter.failWritePrefix = "99_assets/sync/pdf-pager/";
+  await assert.rejects(store.setRoot("99_assets/sync/pdf-pager"), /write failed/);
+  adapter.failWritePrefix = undefined;
+  await store.recordProgress(path, 7);
+
+  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${pathKey(path)}-device-aaaaaaaa.json`;
+  const record = JSON.parse(adapter.files.get(defaultFile) ?? "null") as { progress?: { page?: number } };
+  assert.equal(record.progress?.page, 7);
+});
+
+test("a device write advances beyond timestamps already synced from another device", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
+  const root = ".obsidian/plugins/pdf-pager-hz/records";
+  const path = "资料/时钟偏差.pdf";
+  const future = Date.now() + 24 * 60 * 60_000;
+  adapter.folders.add(root);
+  adapter.files.set(`${root}/${pathKey(path)}-device-aaaaaaaa.json`, JSON.stringify({
+    version: 1,
+    pdfPath: path,
+    deviceId: "device-aaaaaaaa",
+    progress: { page: 5, position: 0, updatedAt: future },
+    bookmarks: {},
+    sessions: {},
+  }));
+  storage.set("pdf-pager-hz:device:test-vault", "device-bbbbbbbb");
+  const second = new StateStore(app);
+  const state = await second.recordProgress(path, 9, 0.25);
+  assert.equal(state.progress?.page, 9);
+  assert.equal((state.progress?.updatedAt ?? 0) > future, true);
 });
