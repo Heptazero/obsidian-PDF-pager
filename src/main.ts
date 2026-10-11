@@ -697,6 +697,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       idleMinutes,
     };
     this.store = new StateStore(this.app, recordFolder);
+    await this.store.migrateReadableFileNames();
     this.addSettingTab(new PdfPagerSettingTab(this.app, this));
     this.registerView(READING_LOG_VIEW, (leaf) => new ReadingLogView(leaf, this));
     this.addRibbonIcon("bar-chart-3", "PDF 阅读日志", () => void this.openReadingLog());

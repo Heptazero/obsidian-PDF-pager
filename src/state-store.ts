@@ -6,6 +6,25 @@ import {
 const PLUGIN_ID = "pdf-pager-hz";
 const LEGACY_ROOT = "99_assets/plugin-data/pdf-pager";
 
+function safeFileStem(pdfPath: string): string {
+  const fileName = pdfPath.normalize("NFC").split("/").pop() ?? "";
+  const withoutControls = [...fileName.replace(/\.pdf$/i, "").trim()]
+    .map((character) => (character.codePointAt(0) ?? 0) < 32 ? "_" : character)
+    .join("");
+  const stem = withoutControls
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 48);
+  return stem || "未命名PDF";
+}
+
+export function recordFileName(pdfPath: string, deviceId: string): string {
+  const book = safeFileStem(pdfPath);
+  const bookKey = pathKey(pdfPath);
+  const deviceKey = pathKey(deviceId);
+  return `${book}__${bookKey}__设备-${deviceKey}.json`;
+}
+
 function uid(): string {
   return typeof window !== "undefined" && window.crypto?.randomUUID
     ? window.crypto.randomUUID()
@@ -95,7 +114,27 @@ export class StateStore {
   }
 
   private filePath(pdfPath: string, device = this.device, root = this.root): string {
-    return `${root}/${pathKey(pdfPath)}-${device}.json`;
+    return `${root}/${recordFileName(pdfPath, device)}`;
+  }
+
+  private async rootRecords(
+    root: string,
+    accepts: (fileName: string) => boolean = () => true,
+  ): Promise<Array<{ file: string; record: DeviceRecord }>> {
+    if (!await this.app.vault.adapter.exists(root)) return [];
+    const files = (await this.app.vault.adapter.list(root)).files.filter((file) => {
+      const fileName = file.slice(root.length + 1);
+      return file.endsWith(".json") && accepts(fileName);
+    });
+    const entries = await Promise.all(files.map(async (file) => {
+      try {
+        const record = parseRecord(await this.app.vault.adapter.read(file));
+        return record ? { file, record } : null;
+      } catch {
+        return null;
+      }
+    }));
+    return entries.filter((entry): entry is { file: string; record: DeviceRecord } => entry !== null);
   }
 
   private async ensureFolder(path: string): Promise<void> {
@@ -111,23 +150,13 @@ export class StateStore {
   }
 
   private async records(pdfPath: string): Promise<DeviceRecord[]> {
-    const prefix = `${pathKey(pdfPath)}-`;
-    const batches = await Promise.all(this.readRoots().map(async (root) => {
-      if (!await this.app.vault.adapter.exists(root)) return [];
-      const list = await this.app.vault.adapter.list(root);
-      const files = list.files.filter((file) => file.slice(root.length + 1).startsWith(prefix) && file.endsWith(".json"));
-      return Promise.all(files.map(async (file) => {
-        try {
-          const record = parseRecord(await this.app.vault.adapter.read(file));
-          return record?.pdfPath.normalize("NFC") === pdfPath.normalize("NFC") ? record : null;
-        } catch {
-          return null;
-        }
-      }));
-    }));
+    const normalizedPath = pdfPath.normalize("NFC");
+    const key = pathKey(pdfPath);
+    const accepts = (fileName: string) => fileName.startsWith(`${key}-`) || fileName.includes(`__${key}__设备-`);
+    const batches = await Promise.all(this.readRoots().map((root) => this.rootRecords(root, accepts)));
     const newestByDevice = new Map<string, DeviceRecord>();
-    for (const record of batches.flat()) {
-      if (!record) continue;
+    for (const { record } of batches.flat()) {
+      if (record.pdfPath.normalize("NFC") !== normalizedPath) continue;
       const current = newestByDevice.get(record.deviceId);
       newestByDevice.set(record.deviceId, current ? mergeDeviceRecords(current, record) : record);
     }
@@ -137,18 +166,12 @@ export class StateStore {
   async readingSessions(): Promise<StoredReadingSession[]> {
     const newest = new Map<string, StoredReadingSession>();
     for (const root of this.readRoots()) {
-      if (!await this.app.vault.adapter.exists(root)) continue;
-      const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
-      for (const file of files) {
-        try {
-          const record = parseRecord(await this.app.vault.adapter.read(file));
-          if (!record) continue;
-          for (const session of Object.values(record.sessions ?? {})) {
-            const stored = { ...session, pdfPath: record.pdfPath, deviceId: record.deviceId };
-            const previous = newest.get(session.id);
-            if (!previous || stored.updatedAt > previous.updatedAt) newest.set(session.id, stored);
-          }
-        } catch { /* Ignore unreadable sidecars. */ }
+      for (const { record } of await this.rootRecords(root)) {
+        for (const session of Object.values(record.sessions ?? {})) {
+          const stored = { ...session, pdfPath: record.pdfPath, deviceId: record.deviceId };
+          const previous = newest.get(session.id);
+          if (!previous || stored.updatedAt > previous.updatedAt) newest.set(session.id, stored);
+        }
       }
     }
     return [...newest.values()].sort((a, b) => a.startedAt - b.startedAt);
@@ -230,15 +253,10 @@ export class StateStore {
     const sourceRoots = this.readRoots();
     const records = new Map<string, DeviceRecord>();
     for (const source of sourceRoots) {
-      if (!await this.app.vault.adapter.exists(source)) continue;
-      for (const file of (await this.app.vault.adapter.list(source)).files.filter((path) => path.endsWith(".json"))) {
-        try {
-          const record = parseRecord(await this.app.vault.adapter.read(file));
-          if (!record) continue;
-          const key = `${record.pdfPath.normalize("NFC")}\0${record.deviceId}`;
-          const current = records.get(key);
-          records.set(key, current ? mergeDeviceRecords(current, record) : record);
-        } catch { /* Ignore unreadable sidecars. */ }
+      for (const { record } of await this.rootRecords(source)) {
+        const key = `${record.pdfPath.normalize("NFC")}\0${record.deviceId}`;
+        const current = records.get(key);
+        records.set(key, current ? mergeDeviceRecords(current, record) : record);
       }
     }
     const previousRoot = this.root;
@@ -264,6 +282,31 @@ export class StateStore {
     }
   }
 
+  async migrateReadableFileNames(): Promise<number> {
+    await Promise.all([...this.pending.values()].map((pending) => pending.catch(() => undefined)));
+    let migrated = 0;
+    for (const root of this.readRoots()) {
+      for (const { file, record } of await this.rootRecords(root)) {
+        const destination = this.filePath(record.pdfPath, record.deviceId, root);
+        if (file === destination) continue;
+        try {
+          let merged = record;
+          try {
+            const existing = parseRecord(await this.app.vault.adapter.read(destination));
+            if (existing?.pdfPath === record.pdfPath && existing.deviceId === record.deviceId) {
+              merged = mergeDeviceRecords(existing, record);
+            }
+          } catch { /* The readable destination does not exist yet. */ }
+          await this.app.vault.adapter.write(destination, JSON.stringify(merged, null, 2) + "\n");
+          await this.app.vault.adapter.remove(file);
+          if (root === this.root && record.deviceId === this.device) this.own.set(record.pdfPath, merged);
+          migrated += 1;
+        } catch { /* Keep the original file if migration cannot finish. */ }
+      }
+    }
+    return migrated;
+  }
+
   async rename(oldPath: string, newPath: string): Promise<void> {
     await this.pending.get(oldPath)?.catch(() => undefined);
     const records = await this.records(oldPath);
@@ -282,8 +325,12 @@ export class StateStore {
       await this.app.vault.adapter.write(to, JSON.stringify(renamed, null, 2) + "\n");
       if (from !== to && await this.app.vault.adapter.exists(from)) await this.app.vault.adapter.remove(from);
       for (const root of this.readRoots()) {
-        const source = this.filePath(oldPath, record.deviceId, root);
-        if (source !== to && await this.app.vault.adapter.exists(source)) await this.app.vault.adapter.remove(source);
+        for (const entry of await this.rootRecords(root)) {
+          if (entry.file !== to && entry.record.deviceId === record.deviceId
+            && entry.record.pdfPath.normalize("NFC") === oldPath.normalize("NFC")) {
+            await this.app.vault.adapter.remove(entry.file);
+          }
+        }
       }
       if (record.deviceId === this.device) this.own.set(newPath, renamed);
     }
@@ -293,13 +340,8 @@ export class StateStore {
   async renamePrefix(oldFolder: string, newFolder: string): Promise<void> {
     const paths = new Set<string>();
     for (const root of this.readRoots()) {
-      if (!await this.app.vault.adapter.exists(root)) continue;
-      const files = (await this.app.vault.adapter.list(root)).files.filter((file) => file.endsWith(".json"));
-      for (const file of files) {
-        try {
-          const record = parseRecord(await this.app.vault.adapter.read(file));
-          if (record?.pdfPath.startsWith(oldFolder + "/")) paths.add(record.pdfPath);
-        } catch { /* Ignore unreadable sidecars. */ }
+      for (const { record } of await this.rootRecords(root)) {
+        if (record.pdfPath.startsWith(oldFolder + "/")) paths.add(record.pdfPath);
       }
     }
     for (const path of paths) await this.rename(path, newFolder + path.slice(oldFolder.length));

@@ -32,7 +32,7 @@ The plugin uses Obsidian's internal PDF.js viewer interface. An Obsidian update 
 - “结算今天”会把当天总时长和起止页写入关联书籍笔记的 `## log`。例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；之后继续阅读时再次结算，会覆盖当天总数并保留下面缩进的感想。
 - 插件会优先查找引用当前 PDF 的书籍笔记。无法唯一确定时，在日志卡片点击“关联书籍笔记”选择一次；关联关系保存在插件 `data.json` 中。
 
-进度、书签和原始阅读时段按 PDF、按设备分别存成 JSON，读取时合并。默认目录是 `.obsidian/plugins/pdf-pager-hz/records/`；可在 PDF Pager 设置中改成任意 Vault 内文件夹，例如 `99_assets/plugin-data/reading-records`。修改目录时会把已发现的旧记录复制过去，不删除原文件。两台设备必须设置相同目录，并让同步软件包含该目录；等待同步后重新打开 PDF 或再次结算即可使用最新数据。设备写入新进度时会先读取已同步记录并生成更高版本时间，减少设备时钟偏差导致旧进度获胜的问题。从 `0.1.7` 起，插件仍兼容旧版 `99_assets/plugin-data/pdf-pager/` 中的记录。
+进度、书签和原始阅读时段按 PDF、按设备分别存成 JSON，读取时合并。默认目录是 `.obsidian/plugins/pdf-pager-hz/records/`；可在 PDF Pager 设置中改成任意 Vault 内文件夹，例如 `99_assets/plugin-data/reading-records`。记录文件使用“PDF 名称 + 路径标识 + 设备标识”命名，例如 `盲视__141e6635ab363461__设备-xxxxxxxxxxxxxxxx.json`；路径和设备标识用于区分同名 PDF 及不同设备。升级后会在插件加载时自动迁移旧的纯哈希文件名，不改变记录内容。修改目录时会把已发现的旧记录复制过去，不删除原文件。两台设备必须设置相同目录，并让同步软件包含该目录；等待同步后重新打开 PDF 或再次结算即可使用最新数据。设备写入新进度时会先读取已同步记录并生成更高版本时间，减少设备时钟偏差导致旧进度获胜的问题。从 `0.1.7` 起，插件仍兼容旧版 `99_assets/plugin-data/pdf-pager/` 中的记录。
 
 本插件使用 Obsidian 未公开的 PDF.js 阅读器接口。Obsidian 更新后，如单页模式或页码获取失效，需要调整 `src/native-viewer.ts`。
 

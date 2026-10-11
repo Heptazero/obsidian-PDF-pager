@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { App } from "obsidian";
 import { pathKey } from "../src/reading-state.ts";
-import { StateStore } from "../src/state-store.ts";
+import { recordFileName, StateStore } from "../src/state-store.ts";
 
 class MemoryAdapter {
   files = new Map<string, string>();
@@ -81,7 +81,40 @@ test("legacy vault records are loaded and copied into the plugin config folder",
 
   const store = new StateStore(app);
   assert.equal((await store.load(path)).progress?.page, 6);
-  assert.equal(adapter.files.has(`.obsidian/plugins/pdf-pager-hz/records/${pathKey(path)}-${device}.json`), true);
+  assert.equal(adapter.files.has(`.obsidian/plugins/pdf-pager-hz/records/${recordFileName(path, device)}`), true);
+});
+
+test("record filenames expose the PDF title while retaining collision-resistant keys", () => {
+  const path = "30_resource/book/科幻小说/盲视 ((加) 彼得·沃茨) .pdf";
+  const device = "4bc4260a-2bcd-411c-9fd7-a403ee56a890";
+  assert.equal(
+    recordFileName(path, device),
+    `盲视 ((加) 彼得·沃茨)__${pathKey(path)}__设备-${pathKey(device)}.json`,
+  );
+  assert.equal(recordFileName("资料/Windows:入门?.pdf", device).includes(":"), false);
+});
+
+test("opaque legacy filenames migrate to readable names without changing record data", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  const app = memoryApp(adapter, storage);
+  const root = "99_assets/plugin-data/pdf-pager";
+  const path = "资料/同步书.pdf";
+  const device = "device-aaaaaaaa";
+  const oldFile = `${root}/${pathKey(path)}-${device}.json`;
+  const newFile = `${root}/${recordFileName(path, device)}`;
+  adapter.folders.add(root);
+  adapter.files.set(oldFile, JSON.stringify({
+    version: 1, pdfPath: path, deviceId: device,
+    progress: { page: 18, position: 0.25, updatedAt: 100 }, bookmarks: {}, sessions: {},
+  }));
+  storage.set("pdf-pager-hz:device:test-vault", device);
+
+  const store = new StateStore(app, root);
+  assert.equal(await store.migrateReadableFileNames(), 1);
+  assert.equal(adapter.files.has(oldFile), false);
+  assert.equal(adapter.files.has(newFile), true);
+  assert.equal((await store.load(path)).progress?.page, 18);
 });
 
 test("reading sessions stay per-device and follow PDF renames", async () => {
@@ -113,11 +146,11 @@ test("custom record folder receives a merged copy without deleting the default r
   storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
   const store = new StateStore(app);
   await store.recordProgress("资料/同步书.pdf", 12, 0.4);
-  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${pathKey("资料/同步书.pdf")}-device-aaaaaaaa.json`;
+  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${recordFileName("资料/同步书.pdf", "device-aaaaaaaa")}`;
   assert.equal(adapter.files.has(defaultFile), true);
 
   const copied = await store.setRoot("99_assets/sync/pdf-pager");
-  const customFile = `99_assets/sync/pdf-pager/${pathKey("资料/同步书.pdf")}-device-aaaaaaaa.json`;
+  const customFile = `99_assets/sync/pdf-pager/${recordFileName("资料/同步书.pdf", "device-aaaaaaaa")}`;
   assert.equal(copied, 1);
   assert.equal(adapter.files.has(defaultFile), true);
   assert.equal(adapter.files.has(customFile), true);
@@ -138,7 +171,7 @@ test("a failed folder migration keeps subsequent writes in the previous record f
   adapter.failWritePrefix = undefined;
   await store.recordProgress(path, 7);
 
-  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${pathKey(path)}-device-aaaaaaaa.json`;
+  const defaultFile = `.obsidian/plugins/pdf-pager-hz/records/${recordFileName(path, "device-aaaaaaaa")}`;
   const record = JSON.parse(adapter.files.get(defaultFile) ?? "null") as { progress?: { page?: number } };
   assert.equal(record.progress?.page, 7);
 });
