@@ -17,7 +17,8 @@ export interface ReadingLogHost {
   resolveReadingNote(pdfPath: string): Promise<TFile | null>;
   linkReadingNote(pdfPath: string, note: TFile): Promise<void>;
   settleReadingDay(day: string): Promise<SettlementResult>;
-  openReadingNote(note: TFile): Promise<void>;
+  openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void>;
+  getReadingLogPreferences(): { sessionMergeMinutes: number; mobileLogBottomPadding: number };
 }
 
 interface ResolvedSummary {
@@ -90,18 +91,20 @@ export class ReadingLogView extends ItemView {
   async refresh(force = false): Promise<void> {
     const revision = ++this.revision;
     const root = this.contentEl;
+    const preferences = this.host.getReadingLogPreferences();
     root.addClass("pdf-pager-log-view");
+    root.setCssProps({ "--pdf-pager-log-mobile-bottom-padding": `${preferences.mobileLogBottomPadding}px` });
     if (!this.loaded) {
       root.empty();
       root.createDiv({ cls: "pdf-pager-log-loading", text: "正在汇总阅读记录…" });
     }
     const sessions = await this.host.store.readingSessions();
-    const signature = sessions.map((session) => [
+    const signature = `${preferences.sessionMergeMinutes}|${preferences.mobileLogBottomPadding}|` + sessions.map((session) => [
       session.id, session.pdfPath, session.day, session.updatedAt, session.durationMs,
       session.startPage, session.endPage,
     ].join(":")).join("|");
     if (!force && this.loaded && signature === this.lastSignature) return;
-    const summaries = aggregateReadingSessions(sessions);
+    const summaries = aggregateReadingSessions(sessions, preferences.sessionMergeMinutes);
     if (revision !== this.revision) return;
     this.lastSignature = signature;
     this.loaded = true;
@@ -166,10 +169,10 @@ export class ReadingLogView extends ItemView {
     const noteButton = noteRow.createEl("button", {
       cls: note ? "pdf-pager-log-note" : "pdf-pager-log-note is-unlinked",
       text: note?.basename ?? "关联书籍笔记",
-      attr: { title: note?.path ?? "结算前需要选择书籍笔记" },
+      attr: { title: note ? `打开 ${note.path} 的 ${summary.day} 日志` : "结算前需要选择书籍笔记" },
     });
     noteButton.addEventListener("click", () => {
-      if (note) void this.host.openReadingNote(note);
+      if (note) void this.host.openReadingNote(note, summary.day, summary.pdfPath);
       else this.chooseNote(summary.pdfPath);
     });
     if (note) {
@@ -179,7 +182,7 @@ export class ReadingLogView extends ItemView {
     }
 
     const detail = card.createEl("details", { cls: "pdf-pager-log-sessions" });
-    detail.createEl("summary", { text: `${summary.sessions.length} 次记录` });
+    detail.createEl("summary", { text: `${summary.sessions.length} 段记录` });
     for (const session of summary.sessions) {
       const row = detail.createDiv("pdf-pager-log-session-row");
       row.createSpan({ text: `${clock(session.startedAt)}–${clock(session.endedAt)}` });

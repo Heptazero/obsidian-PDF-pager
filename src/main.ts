@@ -4,7 +4,9 @@ import {
 } from "./reading-state";
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
-import { aggregateReadingSessions, createReadingSession, localDayKey, upsertDailySettlement } from "./reading-log";
+import {
+  aggregateReadingSessions, createReadingSession, localDayKey, settlementBlockId, upsertDailySettlement,
+} from "./reading-log";
 import {
   READING_LOG_VIEW, ReadingLogView, type SettlementResult,
 } from "./reading-log-view";
@@ -520,6 +522,11 @@ class PagerSession implements PagerActions {
     }, 75);
   }
 
+  openReadingNote(): void {
+    if (this.path) void this.plugin.openReadingNoteForPdf(this.path)
+      .catch((error) => new Notice(`打开书籍日志失败：${String(error)}`));
+  }
+
   private pageMetrics(page = this.page): { container: HTMLElement; pageEl: HTMLElement; pageTop: number; pageHeight: number; viewportHeight: number } | null {
     const pdf = this.native?.pdfViewer;
     const container = pdf?.container;
@@ -690,11 +697,17 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     try { recordFolder = normalizeRecordFolder(saved.recordFolder ?? "", defaultFolder); }
     catch { recordFolder = defaultFolder; }
     const idleMinutes = [5, 10, 15, 30].includes(saved.idleMinutes ?? 0) ? saved.idleMinutes! : 5;
+    const sessionMergeMinutes = [0, 5, 10, 15, 30, 60].includes(saved.sessionMergeMinutes ?? -1)
+      ? saved.sessionMergeMinutes! : 10;
+    const mobileLogBottomPadding = Number.isFinite(saved.mobileLogBottomPadding)
+      ? Math.max(0, Math.min(160, Math.round(saved.mobileLogBottomPadding! / 8) * 8)) : 72;
     this.data = {
-      version: 2,
+      version: 3,
       noteLinks: saved.noteLinks && typeof saved.noteLinks === "object" ? { ...saved.noteLinks } : {},
       recordFolder,
       idleMinutes,
+      sessionMergeMinutes,
+      mobileLogBottomPadding,
     };
     this.store = new StateStore(this.app, recordFolder);
     await this.store.migrateReadableFileNames();
@@ -751,6 +764,11 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       return !!session;
     } });
     this.addCommand({ id: "open-reading-log", name: "打开 PDF 阅读日志", callback: () => void this.openReadingLog() });
+    this.addCommand({ id: "open-linked-reading-note", name: "PDF：打开关联书籍日志", checkCallback: (checking) => {
+      const session = this.activeSession();
+      if (!checking) session?.openReadingNote();
+      return !!session;
+    } });
     this.addCommand({ id: "settle-today", name: "结算今天的 PDF 阅读", callback: () => {
       const day = localDayKey();
       void this.settleReadingDay(day).then((result) => {
@@ -790,6 +808,13 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
 
   getPdfPagerSettings(): PdfPagerSettings { return this.data; }
 
+  getReadingLogPreferences(): { sessionMergeMinutes: number; mobileLogBottomPadding: number } {
+    return {
+      sessionMergeMinutes: this.data.sessionMergeMinutes,
+      mobileLogBottomPadding: this.data.mobileLogBottomPadding,
+    };
+  }
+
   async updateRecordFolder(path: string): Promise<void> {
     const fallback = `${this.app.vault.configDir}/plugins/${this.manifest.id}/records`;
     const normalized = normalizeRecordFolder(path, fallback);
@@ -806,6 +831,20 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     if (![5, 10, 15, 30].includes(minutes)) throw new Error("无操作暂停时间无效");
     this.data.idleMinutes = minutes;
     await this.saveData(this.data);
+  }
+
+  async updateSessionMergeMinutes(minutes: number): Promise<void> {
+    if (![0, 5, 10, 15, 30, 60].includes(minutes)) throw new Error("阅读记录合并间隔无效");
+    this.data.sessionMergeMinutes = minutes;
+    await this.saveData(this.data);
+    this.refreshReadingLog();
+  }
+
+  async updateMobileLogBottomPadding(pixels: number): Promise<void> {
+    if (!Number.isFinite(pixels)) throw new Error("日志底部留白无效");
+    this.data.mobileLogBottomPadding = Math.max(0, Math.min(160, Math.round(pixels / 8) * 8));
+    await this.saveData(this.data);
+    this.refreshReadingLog();
   }
 
   private async openReadingLog(): Promise<void> {
@@ -850,7 +889,9 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
 
   async settleReadingDay(day: string): Promise<SettlementResult> {
     await this.flushReading();
-    const summaries = aggregateReadingSessions(await this.store.readingSessions()).filter((summary) => summary.day === day);
+    const summaries = aggregateReadingSessions(
+      await this.store.readingSessions(), this.data.sessionMergeMinutes,
+    ).filter((summary) => summary.day === day);
     const settled: TFile[] = [];
     const unresolved = [];
     for (const summary of summaries) {
@@ -863,8 +904,22 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     return { settled, unresolved };
   }
 
-  async openReadingNote(note: TFile): Promise<void> {
-    await this.app.workspace.openLinkText(`${note.path}#log`, note.path, false);
+  async openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void> {
+    let target = `${note.path}#log`;
+    if (day && pdfPath) {
+      const blockId = settlementBlockId(day, pdfPath);
+      if ((await this.app.vault.cachedRead(note)).includes(`^${blockId}`)) target = `${note.path}#^${blockId}`;
+    }
+    await this.app.workspace.openLinkText(target, note.path, false);
+  }
+
+  async openReadingNoteForPdf(pdfPath: string): Promise<void> {
+    const note = await this.resolveReadingNote(pdfPath);
+    if (!note) {
+      new Notice("没有找到关联书籍笔记；请先在 PDF 阅读日志中关联");
+      return;
+    }
+    await this.openReadingNote(note, localDayKey(), pdfPath);
   }
 
   private async updateNoteLinksForRename(oldPath: string, newPath: string, folder: boolean): Promise<void> {

@@ -273,6 +273,7 @@
 
 .pdf-pager-log-view {
   --pdf-pager-log-gap: 12px;
+  --pdf-pager-log-mobile-bottom-padding: 72px;
   padding: 18px;
   overflow: auto;
 }
@@ -523,7 +524,7 @@
 
 @media (max-width: 520px) {
   .pdf-pager-log-view {
-    padding: 12px 8px max(18px, env(safe-area-inset-bottom));
+    padding: 12px 8px;
   }
 
   .pdf-pager-log-heading {
@@ -552,5 +553,11 @@
 @media (max-width: 340px) {
   .pdf-pager-log-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (pointer: coarse) {
+  .pdf-pager-log-view {
+    padding-bottom: calc(max(18px, env(safe-area-inset-bottom)) + var(--pdf-pager-log-mobile-bottom-padding));
   }
 }

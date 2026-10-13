@@ -3,16 +3,20 @@ import {
 } from "obsidian";
 
 export interface PdfPagerSettings {
-  version: 2;
+  version: 3;
   noteLinks: Record<string, string>;
   recordFolder: string;
   idleMinutes: number;
+  sessionMergeMinutes: number;
+  mobileLogBottomPadding: number;
 }
 
 export interface PdfPagerSettingsController {
   getPdfPagerSettings(): PdfPagerSettings;
   updateRecordFolder(path: string): Promise<void>;
   updateIdleMinutes(minutes: number): Promise<void>;
+  updateSessionMergeMinutes(minutes: number): Promise<void>;
+  updateMobileLogBottomPadding(pixels: number): Promise<void>;
 }
 
 type FolderChoice = { path: string } | { empty: true };
@@ -109,6 +113,40 @@ export class PdfPagerSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             await this.controller.updateIdleMinutes(Number(value));
             new Notice(`PDF 阅读计时会在无操作 ${value} 分钟后暂停`);
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("相邻阅读记录合并")
+      .setDesc("同一天、同一本书的相邻记录在日志中合并显示。间隔时间不计入阅读时长，原始记录仍会保留。")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("0", "不合并")
+          .addOption("5", "不超过 5 分钟")
+          .addOption("10", "不超过 10 分钟")
+          .addOption("15", "不超过 15 分钟")
+          .addOption("30", "不超过 30 分钟")
+          .addOption("60", "不超过 60 分钟")
+          .setValue(String(settings.sessionMergeMinutes))
+          .onChange(async (value) => {
+            await this.controller.updateSessionMergeMinutes(Number(value));
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("移动端日志底部留白")
+      .setDesc("日志页底部被 Obsidian 工具栏遮挡时调大。")
+      .addSlider((slider) => {
+        let saveTimer: number | null = null;
+        slider
+          .setLimits(0, 160, 8)
+          .setValue(settings.mobileLogBottomPadding)
+          .onChange((value) => {
+            if (saveTimer !== null) window.clearTimeout(saveTimer);
+            saveTimer = window.setTimeout(() => {
+              saveTimer = null;
+              void this.controller.updateMobileLogBottomPadding(value);
+            }, 150);
           });
       });
   }

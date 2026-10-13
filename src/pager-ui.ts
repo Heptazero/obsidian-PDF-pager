@@ -9,6 +9,7 @@ export interface PagerActions {
   deleteBookmark(bookmark: Bookmark): void;
   fit(mode: "page-fit" | "page-width"): void;
   width(factor: number): void;
+  openReadingNote(): void;
 }
 
 function button(parent: HTMLElement, icon: string, label: string, callback: () => void): HTMLButtonElement {
@@ -55,6 +56,7 @@ export class PagerUi {
   private railOffsetY = 0;
   private railSuppressClick = false;
   private headerAction: HTMLElement;
+  private noteAction: HTMLElement;
   private state: ReadingState = { bookmarks: [] };
   private page = 1;
   private pageCount = 1;
@@ -83,6 +85,7 @@ export class PagerUi {
     this.bookmark = button(this.bar, "bookmark-plus", "给当前页加书签", () => actions.addBookmark());
     this.listButton = button(this.bar, "list", "书签列表", () => this.togglePanel("bookmarks"));
     this.widthButton = button(this.bar, "expand", "调整页面宽度", () => this.togglePanel("width"));
+    button(this.bar, "file-text", "打开书籍日志", () => actions.openReadingNote());
     this.panel = view.containerEl.createDiv("pdf-pager-panel");
     this.panel.hidden = true;
     this.panel.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -108,6 +111,7 @@ export class PagerUi {
     this.railStatus.addEventListener("click", (event) => { event.stopPropagation(); this.toggleBar(); });
     this.railNext = button(this.rail, "chevron-right", "下一屏", () => this.actions.next());
     this.headerAction = view.addAction("book-open", "显示或隐藏 PDF 翻页控制", () => this.toggleBar());
+    this.noteAction = view.addAction("file-text", "打开关联书籍日志", () => this.actions.openReadingNote());
     this.render();
   }
 
@@ -246,6 +250,7 @@ export class PagerUi {
     this.clearRailDrag();
     window.removeEventListener("orientationchange", this.resetRailPlacement);
     this.headerAction.remove();
+    this.noteAction.remove();
     this.bar.remove();
     this.panel.remove();
     this.rail.remove();

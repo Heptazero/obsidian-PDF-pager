@@ -34,7 +34,31 @@ export function weekDays(day: string): string[] {
   return Array.from({ length: 7 }, (_, index) => shiftDay(monday, index));
 }
 
-export function aggregateReadingSessions(sessions: StoredReadingSession[]): BookDaySummary[] {
+export function mergeNearbySessions(sessions: StoredReadingSession[], gapMinutes: number): StoredReadingSession[] {
+  const ordered = [...sessions].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  if (gapMinutes <= 0 || ordered.length < 2) return ordered;
+  const maxGapMs = gapMinutes * 60_000;
+  const merged: StoredReadingSession[] = [];
+  for (const session of ordered) {
+    const previous = merged[merged.length - 1];
+    if (!previous || session.startedAt - previous.endedAt > maxGapMs) {
+      merged.push({ ...session });
+      continue;
+    }
+    const nextEndsLater = session.endedAt >= previous.endedAt;
+    previous.id = `${previous.id}+${session.id}`;
+    previous.deviceId = previous.deviceId === session.deviceId ? previous.deviceId : "merged";
+    previous.endedAt = Math.max(previous.endedAt, session.endedAt);
+    previous.durationMs += session.durationMs;
+    if (nextEndsLater) previous.endPage = session.endPage;
+    previous.minPage = Math.min(previous.minPage, session.minPage);
+    previous.maxPage = Math.max(previous.maxPage, session.maxPage);
+    previous.updatedAt = Math.max(previous.updatedAt, session.updatedAt);
+  }
+  return merged;
+}
+
+export function aggregateReadingSessions(sessions: StoredReadingSession[], mergeGapMinutes = 0): BookDaySummary[] {
   const groups = new Map<string, StoredReadingSession[]>();
   for (const session of sessions) {
     if (!session.day || !session.pdfPath || !Number.isFinite(session.durationMs) || session.durationMs <= 0) continue;
@@ -44,18 +68,18 @@ export function aggregateReadingSessions(sessions: StoredReadingSession[]): Book
     groups.set(key, group);
   }
   return [...groups.entries()].map(([key, group]) => {
-    group.sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
-    const first = group[0];
-    const last = group[group.length - 1];
+    const mergedSessions = mergeNearbySessions(group, mergeGapMinutes);
+    const first = mergedSessions[0];
+    const last = mergedSessions[mergedSessions.length - 1];
     return {
       day: key.slice(0, key.indexOf("\0")),
       pdfPath: first.pdfPath,
-      durationMs: group.reduce((total, session) => total + session.durationMs, 0),
+      durationMs: mergedSessions.reduce((total, session) => total + session.durationMs, 0),
       startPage: first.startPage,
       endPage: last.endPage,
-      minPage: Math.min(...group.map((session) => session.minPage)),
-      maxPage: Math.max(...group.map((session) => session.maxPage)),
-      sessions: group,
+      minPage: Math.min(...mergedSessions.map((session) => session.minPage)),
+      maxPage: Math.max(...mergedSessions.map((session) => session.maxPage)),
+      sessions: mergedSessions,
     };
   }).sort((a, b) => b.day.localeCompare(a.day) || b.durationMs - a.durationMs || a.pdfPath.localeCompare(b.pdfPath));
 }
@@ -84,9 +108,13 @@ export function settlementMarker(day: string, pdfPath: string): string {
   return `<!-- pdf-pager:${day}:${pathKey(pdfPath)} -->`;
 }
 
+export function settlementBlockId(day: string, pdfPath: string): string {
+  return `pdf-pager-${day.replace(/-/g, "")}-${pathKey(pdfPath)}`;
+}
+
 export function settlementLine(summary: BookDaySummary): string {
   const monthDay = summary.day.slice(5).replace("-", "");
-  return `- ${monthDay} ${pageRange(summary)} [${formatHourToken(summary.durationMs)}] ${settlementMarker(summary.day, summary.pdfPath)}`;
+  return `- ${monthDay} ${pageRange(summary)} [${formatHourToken(summary.durationMs)}] ${settlementMarker(summary.day, summary.pdfPath)} ^${settlementBlockId(summary.day, summary.pdfPath)}`;
 }
 
 export interface SettlementUpdate {
