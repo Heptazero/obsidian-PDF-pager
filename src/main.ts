@@ -86,6 +86,7 @@ class PagerSession implements PagerActions {
   private readingLastActivity = 0;
   private readingLastSave = 0;
   private userInteractedWhileRestoring = false;
+  private focusMode = false;
 
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
@@ -118,6 +119,12 @@ class PagerSession implements PagerActions {
   };
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (this.disposed || !this.isActive()) return;
+    if (event.key === "Escape" && this.focusMode) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggleFocusMode();
+      return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const target = event.target;
     if (target instanceof HTMLElement && target.matches("input, textarea, select, button, [contenteditable='true']")) return;
@@ -627,6 +634,17 @@ class PagerSession implements PagerActions {
 
   toggleBar(): void { this.ui.toggleBar(); }
 
+  toggleFocusMode(): void {
+    this.focusMode = !this.focusMode;
+    this.plugin.syncFocusMode();
+  }
+
+  isFocusModeEnabled(): boolean { return this.focusMode; }
+
+  focusDocument(): Document { return this.view.containerEl.ownerDocument; }
+
+  applyFocusMode(active: boolean): void { this.ui.setFocusMode(this.focusMode, active); }
+
   async renamed(oldPath: string, newPath: string): Promise<void> {
     if (!this.path || (this.path !== oldPath && !this.path.startsWith(oldPath + "/"))) return;
     const path = newPath + this.path.slice(oldPath.length);
@@ -685,6 +703,7 @@ class PagerSession implements PagerActions {
 export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsController {
   store!: StateStore;
   private sessions = new Map<FileView, PagerSession>();
+  private focusDocuments = new Set<Document>();
   private data!: PdfPagerSettings;
 
   get readingIdleMs(): number { return this.data.idleMinutes * 60_000; }
@@ -736,6 +755,11 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.addCommand({ id: "toggle-controls", name: "PDF：显示或隐藏翻页控制", checkCallback: (checking) => {
       const session = this.activeSession();
       if (!checking) session?.toggleBar();
+      return !!session;
+    } });
+    this.addCommand({ id: "toggle-focus-mode", name: "PDF：切换专注模式", checkCallback: (checking) => {
+      const session = this.activeSession();
+      if (!checking) session?.toggleFocusMode();
       return !!session;
     } });
     this.addCommand({ id: "add-bookmark", name: "PDF：给当前页加书签", checkCallback: (checking) => {
@@ -794,12 +818,24 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       if (!views.has(view)) { session.dispose(); this.sessions.delete(view); }
     }
     this.syncReadingFocus();
+    this.syncFocusMode();
   }
 
   private reflow(): void { for (const session of this.sessions.values()) session.reflow(); }
 
   private syncReadingFocus(): void {
     for (const session of this.sessions.values()) session.syncReadingFocus();
+  }
+
+  syncFocusMode(): void {
+    for (const document of this.focusDocuments) document.body.classList.remove("pdf-pager-focus-mode");
+    this.focusDocuments.clear();
+    const active = this.activeSession();
+    for (const session of this.sessions.values()) session.applyFocusMode(session === active && session.isFocusModeEnabled());
+    if (!active?.isFocusModeEnabled()) return;
+    const document = active.focusDocument();
+    document.body.classList.add("pdf-pager-focus-mode");
+    this.focusDocuments.add(document);
   }
 
   private async flushReading(): Promise<void> {
@@ -944,5 +980,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   onunload(): void {
     for (const session of this.sessions.values()) session.dispose();
     this.sessions.clear();
+    for (const document of this.focusDocuments) document.body.classList.remove("pdf-pager-focus-mode");
+    this.focusDocuments.clear();
   }
 }

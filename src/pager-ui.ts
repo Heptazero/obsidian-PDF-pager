@@ -10,6 +10,7 @@ export interface PagerActions {
   fit(mode: "page-fit" | "page-width"): void;
   width(factor: number): void;
   openReadingNote(): void;
+  toggleFocusMode(): void;
 }
 
 function button(parent: HTMLElement, icon: string, label: string, callback: () => void): HTMLButtonElement {
@@ -57,6 +58,8 @@ export class PagerUi {
   private railSuppressClick = false;
   private headerAction: HTMLElement;
   private noteAction: HTMLElement;
+  private focusAction: HTMLElement;
+  private focusExit: HTMLButtonElement;
   private state: ReadingState = { bookmarks: [] };
   private page = 1;
   private pageCount = 1;
@@ -112,7 +115,21 @@ export class PagerUi {
     this.railNext = button(this.rail, "chevron-right", "下一屏", () => this.actions.next());
     this.headerAction = view.addAction("book-open", "显示或隐藏 PDF 翻页控制", () => this.toggleBar());
     this.noteAction = view.addAction("file-text", "打开关联书籍日志", () => this.actions.openReadingNote());
+    this.focusAction = view.addAction("maximize-2", "进入 PDF 专注模式", () => this.actions.toggleFocusMode());
+    this.focusExit = button(view.containerEl, "minimize-2", "退出 PDF 专注模式", () => this.actions.toggleFocusMode());
+    this.focusExit.addClass("pdf-pager-focus-exit");
     this.render();
+  }
+
+  setFocusMode(enabled: boolean, active: boolean): void {
+    const label = enabled ? "退出 PDF 专注模式" : "进入 PDF 专注模式";
+    setIcon(this.focusAction, enabled ? "minimize-2" : "maximize-2");
+    this.focusAction.setAttribute("aria-label", label);
+    this.focusAction.setAttribute("aria-pressed", String(enabled));
+    this.focusAction.setAttribute("title", label);
+    this.focusAction.setAttribute("data-tooltip-position", "bottom");
+    this.focusAction.toggleClass("is-active", enabled);
+    this.view.containerEl.toggleClass("pdf-pager-focus-active", active);
   }
 
   setFile(path: string, state: ReadingState, pageCount: number): void {
@@ -251,6 +268,8 @@ export class PagerUi {
     window.removeEventListener("orientationchange", this.resetRailPlacement);
     this.headerAction.remove();
     this.noteAction.remove();
+    this.focusAction.remove();
+    this.focusExit.remove();
     this.bar.remove();
     this.panel.remove();
     this.rail.remove();

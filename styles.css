@@ -2,6 +2,36 @@
   position: relative;
 }
 
+body.pdf-pager-focus-mode .workspace-ribbon,
+body.pdf-pager-focus-mode .workspace-split.mod-left-split,
+body.pdf-pager-focus-mode .workspace-split.mod-right-split,
+body.pdf-pager-focus-mode .workspace-drawer,
+body.pdf-pager-focus-mode .workspace-tab-header-container,
+body.pdf-pager-focus-mode .status-bar,
+body.pdf-pager-focus-mode .mobile-navbar,
+body.pdf-pager-focus-mode .mobile-toolbar {
+  display: none;
+}
+
+.pdf-pager-focus-active > .view-header {
+  display: none;
+}
+
+.pdf-pager-focus-exit {
+  position: absolute;
+  z-index: 49;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  display: none;
+  border: 1px solid var(--background-modifier-border);
+  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+  box-shadow: var(--shadow-s);
+}
+
+.pdf-pager-focus-active > .pdf-pager-focus-exit {
+  display: inline-flex;
+}
+
 .pdf-pager-bar {
   position: absolute;
   z-index: 45;

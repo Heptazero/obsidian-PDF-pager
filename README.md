@@ -34,6 +34,7 @@ PDF Pager records active reading sessions, groups nearby sessions for display, a
 - Uses a configurable minimum page width: pinch to zoom in freely, then zoom out only to the selected floor.
 - Provides previous/next screen controls, page-number input, keyboard shortcuts, and Obsidian commands.
 - Keeps navigation controls away from the PDF text area so text selection and dictionary plugins can still receive taps.
+- Includes a PDF-only focus mode that hides Obsidian navigation chrome while the focused PDF tab is active. A floating exit button and `Escape` restore the interface.
 
 ### Reading position, bookmarks, and cross-device records
 
@@ -94,6 +95,7 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 - 宽度滑块设置页面的最小显示宽度。双指可以继续放大，缩小到这个下限即停止；拖动滑块时保留高于下限的双指放大倍率。“适合整页”和“适合宽度”会重置适配基准。
 - 移动端宽度面板会居中并隔离边缘拖动，避免误展开 Obsidian 侧边栏。
 - 移动端日志页提供可调底部留白，横屏和竖屏均可避开 Obsidian 底部工具栏。
+- PDF 顶部动作或命令“PDF：切换专注模式”可以隐藏 Obsidian 的侧栏、标签栏、状态栏和移动端导航。专注模式只在对应 PDF 标签页激活时生效；切到其他页面会恢复界面，返回 PDF 后继续。右上角退出按钮和桌面端 `Esc` 均可退出。
 
 ## Installation / 安装
 
