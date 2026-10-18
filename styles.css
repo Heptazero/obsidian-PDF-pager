@@ -7,13 +7,40 @@ body.pdf-pager-focus-mode .workspace-split.mod-left-split,
 body.pdf-pager-focus-mode .workspace-split.mod-right-split,
 body.pdf-pager-focus-mode .workspace-drawer,
 body.pdf-pager-focus-mode .workspace-tab-header-container,
+body.pdf-pager-focus-mode .titlebar,
 body.pdf-pager-focus-mode .status-bar,
 body.pdf-pager-focus-mode .mobile-navbar,
-body.pdf-pager-focus-mode .mobile-toolbar {
-  display: none;
+body.pdf-pager-focus-mode .mobile-toolbar,
+body.pdf-pager-focus-mode .mobile-tab-switcher {
+  display: none !important;
 }
 
-.pdf-pager-focus-active > .view-header {
+body.pdf-pager-focus-mode .pdf-pager-focus-active .view-header,
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-toolbar,
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-findbar,
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-sidebar-container,
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-sidebar-resizer {
+  display: none !important;
+}
+
+body.pdf-pager-focus-mode .workspace-leaf-content,
+body.pdf-pager-focus-mode .workspace-tabs {
+  padding-top: 0;
+}
+
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-content-container.sidebarOpen .pdf-viewer-container {
+  inset-inline-start: 0 !important;
+}
+
+body.pdf-pager-focus-mode .pdf-pager-focus-active .findbarOpen .pdf-viewer-container {
+  margin-top: 0 !important;
+}
+
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container {
+  scrollbar-width: none;
+}
+
+body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit-scrollbar {
   display: none;
 }
 
