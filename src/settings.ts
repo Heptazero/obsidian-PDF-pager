@@ -3,11 +3,12 @@ import {
 } from "obsidian";
 
 export interface PdfPagerSettings {
-  version: 3;
+  version: 4;
   noteLinks: Record<string, string>;
   recordFolder: string;
   idleMinutes: number;
   sessionMergeMinutes: number;
+  dayEndMinutes: number;
   mobileLogBottomPadding: number;
 }
 
@@ -16,6 +17,7 @@ export interface PdfPagerSettingsController {
   updateRecordFolder(path: string): Promise<void>;
   updateIdleMinutes(minutes: number): Promise<void>;
   updateSessionMergeMinutes(minutes: number): Promise<void>;
+  updateDayEndMinutes(minutes: number): Promise<void>;
   updateMobileLogBottomPadding(pixels: number): Promise<void>;
 }
 
@@ -62,6 +64,19 @@ export function normalizeRecordFolder(value: string, fallback: string): string {
     throw new Error("记录目录必须是 Vault 内的相对文件夹路径");
   }
   return normalizePath(trimmed);
+}
+
+export function formatDayEndTime(minutes: number): string {
+  const bounded = Math.max(0, Math.min(1439, Math.round(minutes)));
+  return `${String(Math.floor(bounded / 60)).padStart(2, "0")}:${String(bounded % 60).padStart(2, "0")}`;
+}
+
+export function parseDayEndTime(value: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours < 24 && minutes < 60 ? hours * 60 + minutes : null;
 }
 
 export class PdfPagerSettingTab extends PluginSettingTab {
@@ -131,6 +146,30 @@ export class PdfPagerSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             await this.controller.updateSessionMergeMinutes(Number(value));
           });
+      });
+
+    new Setting(containerEl)
+      .setName("一天的结束时间")
+      .setDesc("例如 04:00：凌晨 00:00–03:59 仍计入前一天，04:00 起计入新一天。修改后只影响之后新建的阅读记录。")
+      .addText((text) => {
+        text.setValue(formatDayEndTime(settings.dayEndMinutes));
+        text.inputEl.type = "time";
+        text.inputEl.step = "60";
+        text.inputEl.setAttr("aria-label", "PDF 阅读日结束时间");
+        text.inputEl.addEventListener("change", () => {
+          const minutes = parseDayEndTime(text.getValue());
+          if (minutes === null) {
+            text.inputEl.setAttribute("aria-invalid", "true");
+            text.setValue(formatDayEndTime(this.controller.getPdfPagerSettings().dayEndMinutes));
+            new Notice("请输入有效的一天结束时间");
+            return;
+          }
+          text.inputEl.removeAttribute("aria-invalid");
+          void this.controller.updateDayEndMinutes(minutes).catch((error) => {
+            text.setValue(formatDayEndTime(this.controller.getPdfPagerSettings().dayEndMinutes));
+            new Notice(String(error instanceof Error ? error.message : error));
+          });
+        });
       });
 
     new Setting(containerEl)

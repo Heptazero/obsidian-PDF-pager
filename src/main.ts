@@ -309,7 +309,7 @@ class PagerSession implements PagerActions {
 
   private markReadingActivity(timestamp = Date.now()): void {
     if (!this.path || !this.armed || this.restoring || !this.isActive() || document.hidden) return;
-    const day = localDayKey(timestamp);
+    const day = localDayKey(timestamp, this.plugin.readingDayEndMinutes);
     if (this.reading && (timestamp - this.readingLastActivity > this.plugin.readingIdleMs || this.reading.day !== day)) {
       this.persistReadingSession(true);
       this.reading = null;
@@ -333,7 +333,7 @@ class PagerSession implements PagerActions {
       this.reading = null;
       return;
     }
-    if (session.day !== localDayKey(timestamp)) {
+    if (session.day !== localDayKey(timestamp, this.plugin.readingDayEndMinutes)) {
       this.persistReadingSession(true);
       this.reading = null;
       this.markReadingActivity(timestamp);
@@ -707,6 +707,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   private data!: PdfPagerSettings;
 
   get readingIdleMs(): number { return this.data.idleMinutes * 60_000; }
+  get readingDayEndMinutes(): number { return this.data.dayEndMinutes; }
 
   async onload(): Promise<void> {
     const loaded: unknown = await this.loadData();
@@ -718,14 +719,17 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     const idleMinutes = [5, 10, 15, 30].includes(saved.idleMinutes ?? 0) ? saved.idleMinutes! : 5;
     const sessionMergeMinutes = [0, 5, 10, 15, 30, 60].includes(saved.sessionMergeMinutes ?? -1)
       ? saved.sessionMergeMinutes! : 10;
+    const dayEndMinutes = Number.isFinite(saved.dayEndMinutes)
+      ? Math.max(0, Math.min(1439, Math.round(saved.dayEndMinutes!))) : 0;
     const mobileLogBottomPadding = Number.isFinite(saved.mobileLogBottomPadding)
       ? Math.max(0, Math.min(160, Math.round(saved.mobileLogBottomPadding! / 8) * 8)) : 72;
     this.data = {
-      version: 3,
+      version: 4,
       noteLinks: saved.noteLinks && typeof saved.noteLinks === "object" ? { ...saved.noteLinks } : {},
       recordFolder,
       idleMinutes,
       sessionMergeMinutes,
+      dayEndMinutes,
       mobileLogBottomPadding,
     };
     this.store = new StateStore(this.app, recordFolder);
@@ -794,7 +798,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       return !!session;
     } });
     this.addCommand({ id: "settle-today", name: "结算今天的 PDF 阅读", callback: () => {
-      const day = localDayKey();
+      const day = localDayKey(Date.now(), this.data.dayEndMinutes);
       void this.settleReadingDay(day).then((result) => {
         if (result.unresolved.length) new Notice(`已结算 ${result.settled.length} 本；${result.unresolved.length} 本需要先关联书籍笔记`);
         else new Notice(`已结算 ${result.settled.length} 本书`);
@@ -844,9 +848,10 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
 
   getPdfPagerSettings(): PdfPagerSettings { return this.data; }
 
-  getReadingLogPreferences(): { sessionMergeMinutes: number; mobileLogBottomPadding: number } {
+  getReadingLogPreferences(): { sessionMergeMinutes: number; dayEndMinutes: number; mobileLogBottomPadding: number } {
     return {
       sessionMergeMinutes: this.data.sessionMergeMinutes,
+      dayEndMinutes: this.data.dayEndMinutes,
       mobileLogBottomPadding: this.data.mobileLogBottomPadding,
     };
   }
@@ -873,6 +878,16 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     if (![0, 5, 10, 15, 30, 60].includes(minutes)) throw new Error("阅读记录合并间隔无效");
     this.data.sessionMergeMinutes = minutes;
     await this.saveData(this.data);
+    this.refreshReadingLog();
+  }
+
+  async updateDayEndMinutes(minutes: number): Promise<void> {
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1439) throw new Error("阅读日结束时间无效");
+    if (minutes === this.data.dayEndMinutes) return;
+    await this.flushReading();
+    this.data.dayEndMinutes = minutes;
+    await this.saveData(this.data);
+    this.syncReadingFocus();
     this.refreshReadingLog();
   }
 
@@ -955,7 +970,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       new Notice("没有找到关联书籍笔记；请先在 PDF 阅读日志中关联");
       return;
     }
-    await this.openReadingNote(note, localDayKey(), pdfPath);
+    await this.openReadingNote(note, localDayKey(Date.now(), this.data.dayEndMinutes), pdfPath);
   }
 
   private async updateNoteLinksForRename(oldPath: string, newPath: string, folder: boolean): Promise<void> {

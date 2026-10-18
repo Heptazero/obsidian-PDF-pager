@@ -16,8 +16,10 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-export function localDayKey(timestamp = Date.now()): string {
+export function localDayKey(timestamp = Date.now(), dayEndMinutes = 0): string {
   const date = new Date(timestamp);
+  const cutoff = Math.max(0, Math.min(1439, Math.round(dayEndMinutes)));
+  if (date.getHours() * 60 + date.getMinutes() < cutoff) date.setDate(date.getDate() - 1);
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 

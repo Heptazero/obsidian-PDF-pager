@@ -1,6 +1,6 @@
 import { FuzzySuggestModal, ItemView, Notice, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import {
-  aggregateReadingSessions, formatDuration, pageRange, shiftDay, weekDays, type BookDaySummary,
+  aggregateReadingSessions, formatDuration, localDayKey, pageRange, shiftDay, weekDays, type BookDaySummary,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -18,7 +18,7 @@ export interface ReadingLogHost {
   linkReadingNote(pdfPath: string, note: TFile): Promise<void>;
   settleReadingDay(day: string): Promise<SettlementResult>;
   openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void>;
-  getReadingLogPreferences(): { sessionMergeMinutes: number; mobileLogBottomPadding: number };
+  getReadingLogPreferences(): { sessionMergeMinutes: number; dayEndMinutes: number; mobileLogBottomPadding: number };
 }
 
 interface ResolvedSummary {
@@ -99,7 +99,7 @@ export class ReadingLogView extends ItemView {
       root.createDiv({ cls: "pdf-pager-log-loading", text: "正在汇总阅读记录…" });
     }
     const sessions = await this.host.store.readingSessions();
-    const signature = `${preferences.sessionMergeMinutes}|${preferences.mobileLogBottomPadding}|` + sessions.map((session) => [
+    const signature = `${preferences.sessionMergeMinutes}|${preferences.dayEndMinutes}|${preferences.mobileLogBottomPadding}|` + sessions.map((session) => [
       session.id, session.pdfPath, session.day, session.updatedAt, session.durationMs,
       session.startPage, session.endPage,
     ].join(":")).join("|");
@@ -108,8 +108,7 @@ export class ReadingLogView extends ItemView {
     if (revision !== this.revision) return;
     this.lastSignature = signature;
     this.loaded = true;
-    const today = new Date();
-    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const todayKey = localDayKey(Date.now(), preferences.dayEndMinutes);
     const yesterdayKey = shiftDay(todayKey, -1);
     const resolved = await Promise.all(summaries.map(async (summary) => ({
       summary,

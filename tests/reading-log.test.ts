@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  aggregateReadingSessions, formatHourToken, mergeNearbySessions, settlementBlockId, settlementMarker,
+  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, settlementBlockId, settlementMarker,
   upsertDailySettlement, weekDays,
   type BookDaySummary,
 } from "../src/reading-log.ts";
@@ -83,4 +83,12 @@ test("week view starts on Monday", () => {
   assert.deepEqual(weekDays("2026-10-08"), [
     "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11",
   ]);
+});
+
+test("custom day end keeps after-midnight reading in the previous day", () => {
+  const beforeCutoff = new Date(2026, 9, 19, 3, 59).getTime();
+  const atCutoff = new Date(2026, 9, 19, 4, 0).getTime();
+  assert.equal(localDayKey(beforeCutoff, 4 * 60), "2026-10-18");
+  assert.equal(localDayKey(atCutoff, 4 * 60), "2026-10-19");
+  assert.equal(localDayKey(beforeCutoff), "2026-10-19");
 });
