@@ -49,7 +49,9 @@ PDF Pager records active reading sessions, groups nearby sessions for display, a
 - Records active reading only while the PDF tab is focused and pauses when the app goes into the background.
 - Pauses after a configurable idle period and can visually merge nearby sessions without counting the gap as reading time.
 - Lets users choose when a reading day ends, so after-midnight sessions can remain part of the previous day.
-- Shows a foldable daily log and a color-coded weekly chart, with different colors for different books.
+- Shows foldable daily history plus color-coded weekly and monthly charts, including daily-average lines.
+- Marks each book-day as settled, changed, or unsettled and lets users settle any earlier reading day.
+- Opens the PDF from the book title and the linked Markdown log from the compact log row.
 - Links a PDF to the Markdown note that references it and can jump directly to that note's `## log` section or settled date.
 - Manually writes a daily total such as `- 1008 [20-43] [1.3h]`; later settlement updates the total while preserving indented reflections below it.
 
@@ -83,13 +85,13 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 
 插件自动记录聚焦 PDF 的阅读时段；切换标签页或应用进入后台时暂停。默认连续 5 分钟无操作后暂停，也可在设置中改为 10、15 或 30 分钟。
 
-左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。今天、昨天和本周均可折叠；本周柱状图按书籍使用不同颜色。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
+左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。今天、昨天、更早、本周和本月均可折叠；更早日期可以逐日展开和结算。本周与本月按天显示阅读时长，以不同颜色区分书籍，并用虚线标出截至当天的日均时长。本月标题还显示本月阅读天数。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
 
-“结算今天”会把当天总时长和起止页写入关联书籍笔记的 `## log`，例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；之后继续阅读时再次结算，会覆盖当天总数，并保留下面缩进的感想。
+“结算今天”或历史日期里的结算按钮会把当天总时长和起止页写入关联书籍笔记的 `## log`，例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；日志卡片据此显示“已结算”，之后继续阅读并使结算内容发生变化时显示“需更新”。再次结算会覆盖当天总数，并保留下面缩进的感想。
 
 设置中的“一天的结束时间”决定阅读日志何时换日。例如设为 `04:00`，凌晨 00:00–03:59 的阅读仍归入前一天，04:00 起才算新的一天；“今天”“昨天”“本周”和“结算今天”使用同一分界时间。
 
-插件优先查找引用当前 PDF 的书籍笔记。无法唯一确定时，在日志卡片点击“关联书籍笔记”选择一次；关联关系保存在插件 `data.json` 中。PDF 顶部动作、完整翻页控制条和命令“PDF：打开关联书籍日志”会打开关联书籍笔记：已结算的日期定位到对应日期行，否则定位到 `## log`。
+插件优先查找引用当前 PDF 的书籍笔记。无法唯一确定时，在日志卡片点击“选择关联笔记”选择一次；关联关系保存在插件 `data.json` 中。卡片标题可直接打开 PDF；“日志：书籍笔记名”、PDF 顶部动作、完整翻页控制条和命令“PDF：打开关联书籍日志”会打开关联书籍笔记：已结算的日期定位到对应日期行，否则定位到 `## log`。
 
 ### 其他阅读控制
 

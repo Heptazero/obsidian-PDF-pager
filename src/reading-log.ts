@@ -36,6 +36,11 @@ export function weekDays(day: string): string[] {
   return Array.from({ length: 7 }, (_, index) => shiftDay(monday, index));
 }
 
+export function monthDays(day: string): string[] {
+  const [year, month, date] = day.split("-").map(Number);
+  return Array.from({ length: date }, (_, index) => localDayKey(new Date(year, month - 1, index + 1, 12).getTime()));
+}
+
 export function mergeNearbySessions(sessions: StoredReadingSession[], gapMinutes: number): StoredReadingSession[] {
   const ordered = [...sessions].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
   if (gapMinutes <= 0 || ordered.length < 2) return ordered;
@@ -117,6 +122,14 @@ export function settlementBlockId(day: string, pdfPath: string): string {
 export function settlementLine(summary: BookDaySummary): string {
   const monthDay = summary.day.slice(5).replace("-", "");
   return `- ${monthDay} ${pageRange(summary)} [${formatHourToken(summary.durationMs)}] ${settlementMarker(summary.day, summary.pdfPath)} ^${settlementBlockId(summary.day, summary.pdfPath)}`;
+}
+
+export type SettlementStatus = "unsettled" | "outdated" | "settled";
+
+export function settlementStatus(content: string, summary: BookDaySummary): SettlementStatus {
+  if (content.includes(settlementLine(summary))) return "settled";
+  if (content.includes(settlementMarker(summary.day, summary.pdfPath))) return "outdated";
+  return "unsettled";
 }
 
 export interface SettlementUpdate {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, settlementBlockId, settlementMarker,
-  upsertDailySettlement, weekDays,
+  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, settlementBlockId,
+  settlementMarker, settlementStatus, upsertDailySettlement, weekDays,
   type BookDaySummary,
 } from "../src/reading-log.ts";
 import type { StoredReadingSession } from "../src/state-store.ts";
@@ -83,6 +83,18 @@ test("week view starts on Monday", () => {
   assert.deepEqual(weekDays("2026-10-08"), [
     "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11",
   ]);
+});
+
+test("month view includes each elapsed calendar day", () => {
+  assert.deepEqual(monthDays("2026-10-03"), ["2026-10-01", "2026-10-02", "2026-10-03"]);
+});
+
+test("settlement status distinguishes settled, changed, and new records", () => {
+  const summary = aggregateReadingSessions([session()])[0];
+  const settled = upsertDailySettlement("## log\n", summary).content;
+  assert.equal(settlementStatus(settled, summary), "settled");
+  assert.equal(settlementStatus(settled, { ...summary, durationMs: summary.durationMs + 10 * 60_000 }), "outdated");
+  assert.equal(settlementStatus("## log\n", summary), "unsettled");
 });
 
 test("custom day end keeps after-midnight reading in the previous day", () => {

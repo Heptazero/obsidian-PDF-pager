@@ -964,6 +964,17 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     await this.app.workspace.openLinkText(target, note.path, false);
   }
 
+  async openPdf(pdfPath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf") {
+      new Notice("找不到这个 PDF，文件可能已移动");
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    await this.app.workspace.revealLeaf(leaf);
+  }
+
   async openReadingNoteForPdf(pdfPath: string): Promise<void> {
     const note = await this.resolveReadingNote(pdfPath);
     if (!note) {

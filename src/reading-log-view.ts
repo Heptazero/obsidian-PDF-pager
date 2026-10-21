@@ -1,6 +1,7 @@
-import { FuzzySuggestModal, ItemView, Notice, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, ItemView, Notice, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import {
-  aggregateReadingSessions, formatDuration, localDayKey, pageRange, shiftDay, weekDays, type BookDaySummary,
+  aggregateReadingSessions, formatDuration, localDayKey, monthDays, pageRange, settlementStatus, shiftDay, weekDays,
+  type BookDaySummary, type SettlementStatus,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -18,12 +19,14 @@ export interface ReadingLogHost {
   linkReadingNote(pdfPath: string, note: TFile): Promise<void>;
   settleReadingDay(day: string): Promise<SettlementResult>;
   openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void>;
+  openPdf(pdfPath: string): Promise<void>;
   getReadingLogPreferences(): { sessionMergeMinutes: number; dayEndMinutes: number; mobileLogBottomPadding: number };
 }
 
 interface ResolvedSummary {
   summary: BookDaySummary;
   note: TFile | null;
+  status: SettlementStatus | "unlinked";
 }
 
 function fileName(path: string): string {
@@ -40,6 +43,20 @@ function bookHue(path: string): number {
 function clock(timestamp: number): string {
   const date = new Date(timestamp);
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function dayLabel(day: string): string {
+  const [, month, date] = day.split("-").map(Number);
+  const weekday = ["日", "一", "二", "三", "四", "五", "六"];
+  const value = new Date(`${day}T12:00:00`);
+  return `${month}月${date}日 · 周${weekday[value.getDay()]}`;
+}
+
+function statusLabel(status: ResolvedSummary["status"]): string {
+  if (status === "settled") return "已结算";
+  if (status === "outdated") return "需更新";
+  if (status === "unlinked") return "未关联";
+  return "未结算";
 }
 
 class NoteSuggestModal extends FuzzySuggestModal<TFile> {
@@ -110,23 +127,32 @@ export class ReadingLogView extends ItemView {
     this.loaded = true;
     const todayKey = localDayKey(Date.now(), preferences.dayEndMinutes);
     const yesterdayKey = shiftDay(todayKey, -1);
-    const resolved = await Promise.all(summaries.map(async (summary) => ({
-      summary,
-      note: await this.host.resolveReadingNote(summary.pdfPath),
-    })));
+    const resolved = await Promise.all(summaries.map(async (summary) => {
+      const note = await this.host.resolveReadingNote(summary.pdfPath);
+      if (!note) return { summary, note, status: "unlinked" as const };
+      const content = await this.app.vault.cachedRead(note);
+      return { summary, note, status: settlementStatus(content, summary) };
+    }));
     if (revision !== this.revision) return;
     root.empty();
     const heading = root.createDiv("pdf-pager-log-heading");
     const title = heading.createDiv();
     title.createEl("h2", { text: "PDF 阅读日志" });
     title.createDiv({ cls: "pdf-pager-log-subtitle", text: "阅读时自动记录，写日记时手动结算。" });
-    const settle = heading.createEl("button", { cls: "mod-cta", text: "结算今天" });
-    settle.disabled = !resolved.some((item) => item.summary.day === todayKey);
+    const todayItems = resolved.filter((item) => item.summary.day === todayKey);
+    const todaySettled = todayItems.length > 0 && todayItems.every((item) => item.status === "settled");
+    const settle = heading.createEl("button", {
+      cls: todaySettled ? undefined : "mod-cta",
+      text: todaySettled ? "今日已结算" : todayItems.some((item) => item.status === "outdated") ? "更新今日结算" : "结算今天",
+    });
+    settle.disabled = todayItems.length === 0 || todaySettled;
     settle.addEventListener("click", () => void this.settle(todayKey));
 
     this.renderDay(root, "today", "今天", todayKey, resolved, true, true);
     this.renderDay(root, "yesterday", "昨天", yesterdayKey, resolved, false, true);
+    this.renderHistory(root, yesterdayKey, resolved);
     this.renderWeek(root, todayKey, resolved);
+    this.renderMonth(root, todayKey, resolved);
   }
 
   private renderDay(
@@ -140,9 +166,13 @@ export class ReadingLogView extends ItemView {
     summaryEl.createSpan({ text: label });
     summaryEl.createSpan({ cls: "pdf-pager-log-section-total", text: formatDuration(dayItems.reduce((sum, item) => sum + item.summary.durationMs, 0)) });
     const body = section.createDiv("pdf-pager-log-section-body");
-    if (allowSettle && dayItems.length > 0 && label !== "今天") {
+    const allSettled = dayItems.length > 0 && dayItems.every((item) => item.status === "settled");
+    if (allSettled) summaryEl.createSpan({ cls: "pdf-pager-log-settlement is-settled", text: "已结算" });
+    if (allowSettle && dayItems.length > 0 && label !== "今天" && !allSettled) {
       const actions = body.createDiv("pdf-pager-log-day-actions");
-      const settle = actions.createEl("button", { text: `结算${label}` });
+      const settle = actions.createEl("button", {
+        text: dayItems.some((item) => item.status === "outdated") ? `更新${label}结算` : `结算${label}`,
+      });
       settle.addEventListener("click", () => void this.settle(day));
     }
     if (dayItems.length === 0) {
@@ -158,27 +188,33 @@ export class ReadingLogView extends ItemView {
     const card = parent.createDiv("pdf-pager-log-book");
     card.setCssProps({ "--pdf-pager-book-hue": String(bookHue(summary.pdfPath)) });
     const heading = card.createDiv("pdf-pager-log-book-heading");
-    heading.createSpan("pdf-pager-log-book-dot");
-    heading.createDiv({ cls: "pdf-pager-log-book-title", text: fileName(summary.pdfPath), attr: { title: summary.pdfPath } });
-    const metrics = card.createDiv("pdf-pager-log-book-metrics");
-    metrics.createSpan({ text: formatDuration(summary.durationMs) });
-    metrics.createSpan({ text: pageRange(summary).slice(1, -1).replace("-", "–") + " 页" });
+    const identity = heading.createDiv("pdf-pager-log-book-identity");
+    identity.createSpan("pdf-pager-log-book-dot");
+    const title = identity.createEl("button", {
+      cls: "pdf-pager-log-book-title",
+      text: fileName(summary.pdfPath),
+      attr: { title: `打开 ${summary.pdfPath}` },
+    });
+    title.addEventListener("click", () => void this.host.openPdf(summary.pdfPath));
+    const metrics = heading.createDiv("pdf-pager-log-book-metrics");
+    metrics.createSpan({ cls: "pdf-pager-log-book-duration", text: formatDuration(summary.durationMs) });
+    metrics.createSpan({ cls: "pdf-pager-log-book-pages", text: pageRange(summary).slice(1, -1).replace("-", "–") + " 页" });
 
     const noteRow = card.createDiv("pdf-pager-log-note-row");
+    noteRow.createSpan({ cls: "pdf-pager-log-note-label", text: "日志：" });
     const noteButton = noteRow.createEl("button", {
       cls: note ? "pdf-pager-log-note" : "pdf-pager-log-note is-unlinked",
-      text: note?.basename ?? "关联书籍笔记",
+      text: note?.basename ?? "选择关联笔记",
       attr: { title: note ? `打开 ${note.path} 的 ${summary.day} 日志` : "结算前需要选择书籍笔记" },
     });
     noteButton.addEventListener("click", () => {
       if (note) void this.host.openReadingNote(note, summary.day, summary.pdfPath);
       else this.chooseNote(summary.pdfPath);
     });
-    if (note) {
-      const change = noteRow.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "更换关联笔记", title: "更换关联笔记" } });
-      setIcon(change, "pencil");
-      change.addEventListener("click", () => this.chooseNote(summary.pdfPath));
-    }
+    noteRow.createSpan({
+      cls: `pdf-pager-log-settlement is-${item.status}`,
+      text: statusLabel(item.status),
+    });
 
     const detail = card.createEl("details", { cls: "pdf-pager-log-sessions" });
     detail.createEl("summary", { text: `${summary.sessions.length} 段记录` });
@@ -187,6 +223,38 @@ export class ReadingLogView extends ItemView {
       row.createSpan({ text: `${clock(session.startedAt)}–${clock(session.endedAt)}` });
       row.createSpan({ text: formatDuration(session.durationMs) });
       row.createSpan({ text: `p${session.startPage}–${session.endPage}` });
+    }
+  }
+
+  private renderHistory(root: HTMLElement, yesterday: string, items: ResolvedSummary[]): void {
+    const days = [...new Set(items.map((item) => item.summary.day).filter((day) => day < yesterday))].sort().reverse();
+    if (days.length === 0) return;
+    const section = root.createEl("details", { cls: "pdf-pager-log-section pdf-pager-log-history" });
+    section.open = this.openSections.get("history") ?? false;
+    section.addEventListener("toggle", () => this.rememberSection("history", section.open));
+    const summary = section.createEl("summary");
+    summary.createSpan({ text: "更早" });
+    summary.createSpan({ cls: "pdf-pager-log-section-total", text: `${days.length} 个阅读日` });
+    const body = section.createDiv("pdf-pager-log-section-body pdf-pager-log-history-list");
+    for (const day of days) {
+      const dayItems = items.filter((item) => item.summary.day === day);
+      const total = dayItems.reduce((sum, item) => sum + item.summary.durationMs, 0);
+      const allSettled = dayItems.every((item) => item.status === "settled");
+      const group = body.createEl("details", { cls: "pdf-pager-log-history-day" });
+      const groupSummary = group.createEl("summary");
+      groupSummary.createSpan({ text: dayLabel(day) });
+      if (allSettled) groupSummary.createSpan({ cls: "pdf-pager-log-settlement is-settled", text: "已结算" });
+      groupSummary.createSpan({ cls: "pdf-pager-log-section-total", text: formatDuration(total) });
+      const content = group.createDiv("pdf-pager-log-history-day-body");
+      if (!allSettled) {
+        const actions = content.createDiv("pdf-pager-log-day-actions");
+        const settle = actions.createEl("button", {
+          text: dayItems.some((item) => item.status === "outdated") ? "更新这一天" : "结算这一天",
+        });
+        settle.addEventListener("click", () => void this.settle(day));
+      }
+      const grid = content.createDiv("pdf-pager-log-grid");
+      for (const item of dayItems) this.renderBook(grid, item);
     }
   }
 
@@ -202,9 +270,40 @@ export class ReadingLogView extends ItemView {
     summary.createSpan({ text: "本周" });
     summary.createSpan({ cls: "pdf-pager-log-section-total", text: formatDuration(totals.reduce((sum, value) => sum + value, 0)) });
     const body = section.createDiv("pdf-pager-log-section-body");
-    const chart = body.createDiv("pdf-pager-log-chart");
-    const max = Math.max(...totals, 1);
     const labels = ["一", "二", "三", "四", "五", "六", "日"];
+    const elapsed = Math.max(1, days.filter((day) => day <= today).length);
+    this.renderChart(body, days, totals, labels, today, items, elapsed, false);
+  }
+
+  private renderMonth(root: HTMLElement, today: string, items: ResolvedSummary[]): void {
+    const days = monthDays(today);
+    const totals = days.map((day) => items
+      .filter((item) => item.summary.day === day)
+      .reduce((sum, item) => sum + item.summary.durationMs, 0));
+    const section = root.createEl("details", { cls: "pdf-pager-log-section pdf-pager-log-month" });
+    section.open = this.openSections.get("month") ?? false;
+    section.addEventListener("toggle", () => this.rememberSection("month", section.open));
+    const summary = section.createEl("summary");
+    summary.createSpan({ text: "本月" });
+    const readingDays = totals.filter((value) => value > 0).length;
+    summary.createSpan({ cls: "pdf-pager-log-section-total", text: `${formatDuration(totals.reduce((sum, value) => sum + value, 0))} · 阅读 ${readingDays} 天` });
+    const body = section.createDiv("pdf-pager-log-section-body");
+    this.renderChart(body, days, totals, days.map((day) => String(Number(day.slice(-2)))), today, items, days.length, true);
+  }
+
+  private renderChart(
+    body: HTMLElement, days: string[], totals: number[], labels: string[], today: string,
+    items: ResolvedSummary[], averageDivisor: number, scrollable: boolean,
+  ): void {
+    const wrapper = scrollable ? body.createDiv("pdf-pager-log-chart-scroll") : body;
+    const chart = wrapper.createDiv(scrollable ? "pdf-pager-log-chart is-month" : "pdf-pager-log-chart");
+    chart.setCssProps({
+      "--pdf-pager-chart-days": String(days.length),
+      "--pdf-pager-chart-min-width": `${days.length * 42}px`,
+    });
+    const total = totals.reduce((sum, value) => sum + value, 0);
+    const average = total / Math.max(1, averageDivisor);
+    const max = Math.max(...totals, average, 1);
     for (let index = 0; index < days.length; index += 1) {
       const column = chart.createDiv("pdf-pager-log-chart-column");
       const value = column.createDiv({ cls: "pdf-pager-log-chart-value", text: totals[index] ? formatDuration(totals[index]) : "" });
@@ -222,13 +321,16 @@ export class ReadingLogView extends ItemView {
       }
       column.createDiv({ cls: days[index] === today ? "pdf-pager-log-chart-label is-today" : "pdf-pager-log-chart-label", text: labels[index] });
     }
-    const weekBooks = new Map<string, string>();
+    const averageLine = chart.createDiv("pdf-pager-log-chart-average");
+    averageLine.setCssProps({ "--pdf-pager-average-bottom": `${24 + average / max * 112}px` });
+    averageLine.createSpan({ text: `日均 ${formatDuration(average)}` });
+    const books = new Map<string, string>();
     for (const item of items) {
-      if (days.includes(item.summary.day)) weekBooks.set(item.summary.pdfPath, fileName(item.summary.pdfPath));
+      if (days.includes(item.summary.day)) books.set(item.summary.pdfPath, fileName(item.summary.pdfPath));
     }
-    if (weekBooks.size > 0) {
+    if (books.size > 0) {
       const legend = body.createDiv("pdf-pager-log-legend");
-      for (const [path, name] of weekBooks) {
+      for (const [path, name] of books) {
         const entry = legend.createDiv("pdf-pager-log-legend-item");
         entry.setCssProps({ "--pdf-pager-book-hue": String(bookHue(path)) });
         entry.createSpan("pdf-pager-log-book-dot");
