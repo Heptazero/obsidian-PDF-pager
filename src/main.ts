@@ -938,11 +938,12 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     await this.saveData(this.data);
   }
 
-  async settleReadingDay(day: string): Promise<SettlementResult> {
+  async settleReadingDay(day: string, pdfPaths?: string[]): Promise<SettlementResult> {
     await this.flushReading();
+    const allowed = pdfPaths ? new Set(pdfPaths.map((path) => path.normalize("NFC"))) : null;
     const summaries = aggregateReadingSessions(
       await this.store.readingSessions(), this.data.sessionMergeMinutes,
-    ).filter((summary) => summary.day === day);
+    ).filter((summary) => summary.day === day && (!allowed || allowed.has(summary.pdfPath.normalize("NFC"))));
     const settled: TFile[] = [];
     const unresolved = [];
     for (const summary of summaries) {

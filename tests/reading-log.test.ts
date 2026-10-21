@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, settlementBlockId,
-  settlementMarker, settlementStatus, upsertDailySettlement, weekDays,
+  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, readingType, settlementBlockId,
+  settlementMarker, settlementStatus, UNCLASSIFIED_READING_TYPE, upsertDailySettlement, weekDays,
   type BookDaySummary,
 } from "../src/reading-log.ts";
 import type { StoredReadingSession } from "../src/state-store.ts";
@@ -87,6 +87,13 @@ test("week view starts on Monday", () => {
 
 test("month view includes each elapsed calendar day", () => {
   assert.deepEqual(monthDays("2026-10-03"), ["2026-10-01", "2026-10-02", "2026-10-03"]);
+});
+
+test("reading type follows note frontmatter and keeps missing values separate", () => {
+  assert.equal(readingType(" book "), "book");
+  assert.equal(readingType(["paper", "reference"]), "paper");
+  assert.equal(readingType(undefined), UNCLASSIFIED_READING_TYPE);
+  assert.equal(readingType([]), UNCLASSIFIED_READING_TYPE);
 });
 
 test("settlement status distinguishes settled, changed, and new records", () => {

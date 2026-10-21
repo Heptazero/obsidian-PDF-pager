@@ -12,6 +12,17 @@ export interface BookDaySummary {
   sessions: StoredReadingSession[];
 }
 
+export const UNCLASSIFIED_READING_TYPE = "__unclassified__";
+
+export function readingType(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const first = value.find((item): item is string => typeof item === "string" && item.trim().length > 0);
+    if (first) return first.trim();
+  }
+  return UNCLASSIFIED_READING_TYPE;
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, "0");
 }

@@ -354,6 +354,42 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit
   font-size: var(--font-ui-small);
 }
 
+.pdf-pager-log-type-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin: -4px 0 12px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.pdf-pager-log-type-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.pdf-pager-log-type-tab {
+  appearance: none;
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.pdf-pager-log-type-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.pdf-pager-log-type-tab.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
 .pdf-pager-log-section {
   margin-top: 10px;
   border: 1px solid var(--background-modifier-border);

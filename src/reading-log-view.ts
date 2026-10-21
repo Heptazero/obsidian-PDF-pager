@@ -1,7 +1,7 @@
 import { FuzzySuggestModal, ItemView, Notice, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import {
-  aggregateReadingSessions, formatDuration, localDayKey, monthDays, pageRange, settlementStatus, shiftDay, weekDays,
-  type BookDaySummary, type SettlementStatus,
+  aggregateReadingSessions, formatDuration, localDayKey, monthDays, pageRange, readingType, settlementStatus, shiftDay,
+  UNCLASSIFIED_READING_TYPE, weekDays, type BookDaySummary, type SettlementStatus,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -17,7 +17,7 @@ export interface ReadingLogHost {
   store: StateStore;
   resolveReadingNote(pdfPath: string): Promise<TFile | null>;
   linkReadingNote(pdfPath: string, note: TFile): Promise<void>;
-  settleReadingDay(day: string): Promise<SettlementResult>;
+  settleReadingDay(day: string, pdfPaths?: string[]): Promise<SettlementResult>;
   openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void>;
   openPdf(pdfPath: string): Promise<void>;
   getReadingLogPreferences(): { sessionMergeMinutes: number; dayEndMinutes: number; mobileLogBottomPadding: number };
@@ -27,6 +27,7 @@ interface ResolvedSummary {
   summary: BookDaySummary;
   note: TFile | null;
   status: SettlementStatus | "unlinked";
+  type: string;
 }
 
 function fileName(path: string): string {
@@ -59,6 +60,13 @@ function statusLabel(status: ResolvedSummary["status"]): string {
   return "未结算";
 }
 
+function typeLabel(type: string): string {
+  if (type === "book") return "书籍";
+  if (type === "paper") return "论文";
+  if (type === UNCLASSIFIED_READING_TYPE) return "未分类";
+  return type;
+}
+
 class NoteSuggestModal extends FuzzySuggestModal<TFile> {
   private files: TFile[];
 
@@ -83,10 +91,15 @@ export class ReadingLogView extends ItemView {
   private loaded = false;
   private openSections = new Map<string, boolean>();
   private sectionStorageKey: string;
+  private typeStorageKey: string;
+  private selectedType: string;
 
   constructor(leaf: WorkspaceLeaf, private host: ReadingLogHost) {
     super(leaf);
     this.sectionStorageKey = `pdf-pager-hz:log-sections:${host.app.vault.getName()}`;
+    this.typeStorageKey = `pdf-pager-hz:log-type:${host.app.vault.getName()}`;
+    const storedType: unknown = host.app.loadLocalStorage(this.typeStorageKey);
+    this.selectedType = typeof storedType === "string" ? storedType : "*";
     const stored: unknown = host.app.loadLocalStorage(this.sectionStorageKey);
     if (stored && typeof stored === "object") {
       for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
@@ -102,6 +115,7 @@ export class ReadingLogView extends ItemView {
   async onOpen(): Promise<void> {
     this.addAction("refresh-cw", "刷新阅读日志", () => void this.refresh(true));
     this.registerInterval(window.setInterval(() => void this.refresh(), 30_000));
+    this.registerEvent(this.app.metadataCache.on("changed", () => void this.refresh(true)));
     await this.refresh();
   }
 
@@ -129,30 +143,64 @@ export class ReadingLogView extends ItemView {
     const yesterdayKey = shiftDay(todayKey, -1);
     const resolved = await Promise.all(summaries.map(async (summary) => {
       const note = await this.host.resolveReadingNote(summary.pdfPath);
-      if (!note) return { summary, note, status: "unlinked" as const };
+      if (!note) return { summary, note, status: "unlinked" as const, type: UNCLASSIFIED_READING_TYPE };
       const content = await this.app.vault.cachedRead(note);
-      return { summary, note, status: settlementStatus(content, summary) };
+      const frontmatter = this.app.metadataCache.getFileCache(note)?.frontmatter;
+      return { summary, note, status: settlementStatus(content, summary), type: readingType(frontmatter?.type) };
     }));
     if (revision !== this.revision) return;
+    const types = [...new Set(resolved.map((item) => item.type))].sort((a, b) => {
+      if (a === UNCLASSIFIED_READING_TYPE) return 1;
+      if (b === UNCLASSIFIED_READING_TYPE) return -1;
+      return a.localeCompare(b, "zh-CN");
+    });
+    if (this.selectedType !== "*" && !types.includes(this.selectedType)) this.selectedType = "*";
+    const visible = this.selectedType === "*" ? resolved : resolved.filter((item) => item.type === this.selectedType);
     root.empty();
     const heading = root.createDiv("pdf-pager-log-heading");
     const title = heading.createDiv();
     title.createEl("h2", { text: "PDF 阅读日志" });
     title.createDiv({ cls: "pdf-pager-log-subtitle", text: "阅读时自动记录，写日记时手动结算。" });
-    const todayItems = resolved.filter((item) => item.summary.day === todayKey);
+    this.renderTypeTabs(root, types);
+    const todayItems = visible.filter((item) => item.summary.day === todayKey);
     const todaySettled = todayItems.length > 0 && todayItems.every((item) => item.status === "settled");
     const settle = heading.createEl("button", {
       cls: todaySettled ? undefined : "mod-cta",
       text: todaySettled ? "今日已结算" : todayItems.some((item) => item.status === "outdated") ? "更新今日结算" : "结算今天",
     });
     settle.disabled = todayItems.length === 0 || todaySettled;
-    settle.addEventListener("click", () => void this.settle(todayKey));
+    settle.addEventListener("click", () => void this.settle(todayKey, todayItems));
 
-    this.renderDay(root, "today", "今天", todayKey, resolved, true, true);
-    this.renderDay(root, "yesterday", "昨天", yesterdayKey, resolved, false, true);
-    this.renderHistory(root, yesterdayKey, resolved);
-    this.renderWeek(root, todayKey, resolved);
-    this.renderMonth(root, todayKey, resolved);
+    this.renderDay(root, "today", "今天", todayKey, visible, true, true);
+    this.renderDay(root, "yesterday", "昨天", yesterdayKey, visible, false, true);
+    this.renderHistory(root, yesterdayKey, visible);
+    this.renderWeek(root, todayKey, visible);
+    this.renderMonth(root, todayKey, visible);
+  }
+
+  private renderTypeTabs(root: HTMLElement, types: string[]): void {
+    const tabs = root.createDiv({
+      cls: "pdf-pager-log-type-tabs",
+      attr: { role: "tablist", "aria-label": "按笔记 type 筛选阅读统计" },
+    });
+    for (const type of ["*", ...types]) {
+      const active = type === this.selectedType;
+      const button = tabs.createEl("button", {
+        cls: active ? "pdf-pager-log-type-tab is-active" : "pdf-pager-log-type-tab",
+        text: type === "*" ? "全部" : typeLabel(type),
+        attr: {
+          role: "tab",
+          "aria-selected": String(active),
+          title: type === "*" ? "显示全部类型" : `type: ${type === UNCLASSIFIED_READING_TYPE ? "未设置" : type}`,
+        },
+      });
+      button.addEventListener("click", () => {
+        if (type === this.selectedType) return;
+        this.selectedType = type;
+        this.host.app.saveLocalStorage(this.typeStorageKey, type);
+        void this.refresh(true);
+      });
+    }
   }
 
   private renderDay(
@@ -173,7 +221,7 @@ export class ReadingLogView extends ItemView {
       const settle = actions.createEl("button", {
         text: dayItems.some((item) => item.status === "outdated") ? `更新${label}结算` : `结算${label}`,
       });
-      settle.addEventListener("click", () => void this.settle(day));
+      settle.addEventListener("click", () => void this.settle(day, dayItems));
     }
     if (dayItems.length === 0) {
       body.createDiv({ cls: "pdf-pager-log-empty", text: "没有阅读记录" });
@@ -251,7 +299,7 @@ export class ReadingLogView extends ItemView {
         const settle = actions.createEl("button", {
           text: dayItems.some((item) => item.status === "outdated") ? "更新这一天" : "结算这一天",
         });
-        settle.addEventListener("click", () => void this.settle(day));
+        settle.addEventListener("click", () => void this.settle(day, dayItems));
       }
       const grid = content.createDiv("pdf-pager-log-grid");
       for (const item of dayItems) this.renderBook(grid, item);
@@ -350,8 +398,8 @@ export class ReadingLogView extends ItemView {
     this.host.app.saveLocalStorage(this.sectionStorageKey, Object.fromEntries(this.openSections));
   }
 
-  private async settle(day: string): Promise<void> {
-    const result = await this.host.settleReadingDay(day);
+  private async settle(day: string, items: ResolvedSummary[]): Promise<void> {
+    const result = await this.host.settleReadingDay(day, items.map((item) => item.summary.pdfPath));
     if (result.settled.length === 0 && result.unresolved.length > 0) {
       new Notice("请先为当天的 PDF 关联书籍笔记");
     } else if (result.unresolved.length > 0) {
