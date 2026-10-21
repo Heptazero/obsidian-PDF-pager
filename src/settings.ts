@@ -3,8 +3,9 @@ import {
 } from "obsidian";
 
 export interface PdfPagerSettings {
-  version: 4;
+  version: 5;
   noteLinks: Record<string, string>;
+  readingTypes: string[];
   recordFolder: string;
   idleMinutes: number;
   sessionMergeMinutes: number;

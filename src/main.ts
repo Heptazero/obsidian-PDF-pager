@@ -5,7 +5,8 @@ import {
 import { getNativeViewer, hasExplicitPageTarget, NO_SPREAD, PAGE_MODE, type NativeViewer } from "./native-viewer";
 import { PagerUi, type PagerActions } from "./pager-ui";
 import {
-  aggregateReadingSessions, createReadingSession, localDayKey, settlementBlockId, upsertDailySettlement,
+  aggregateReadingSessions, createReadingSession, localDayKey, normalizeReadingTypeName, normalizeReadingTypes,
+  readingType, settlementBlockId, upsertDailySettlement,
 } from "./reading-log";
 import {
   READING_LOG_VIEW, ReadingLogView, type SettlementResult,
@@ -724,8 +725,9 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     const mobileLogBottomPadding = Number.isFinite(saved.mobileLogBottomPadding)
       ? Math.max(0, Math.min(160, Math.round(saved.mobileLogBottomPadding! / 8) * 8)) : 72;
     this.data = {
-      version: 4,
+      version: 5,
       noteLinks: saved.noteLinks && typeof saved.noteLinks === "object" ? { ...saved.noteLinks } : {},
+      readingTypes: normalizeReadingTypes(saved.readingTypes ?? ["book", "paper"]),
       recordFolder,
       idleMinutes,
       sessionMergeMinutes,
@@ -856,6 +858,69 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     };
   }
 
+  getReadingTypes(): string[] { return [...this.data.readingTypes]; }
+
+  async addReadingType(value: string): Promise<string> {
+    const type = normalizeReadingTypeName(value);
+    if (!type) throw new Error("类型名称不能为空");
+    if (type.length > 40) throw new Error("类型名称不能超过 40 个字符");
+    const existing = this.data.readingTypes.find((item) => item.toLocaleLowerCase() === type.toLocaleLowerCase());
+    if (existing) return existing;
+    this.data.readingTypes.push(type);
+    await this.saveData(this.data);
+    this.refreshReadingLog(true);
+    return type;
+  }
+
+  async setReadingNoteType(note: TFile, value: string | null): Promise<void> {
+    const type = value === null ? "" : normalizeReadingTypeName(value);
+    if (value !== null && !type) throw new Error("类型名称不能为空");
+    if (type) await this.addReadingType(type);
+    await this.app.fileManager.processFrontMatter(note, (frontmatter) => {
+      const properties = frontmatter as Record<string, unknown>;
+      if (type) properties.type = type;
+      else delete properties.type;
+    });
+    this.refreshReadingLog(true);
+  }
+
+  async renameReadingType(previous: string, value: string, notes: TFile[]): Promise<string> {
+    const next = normalizeReadingTypeName(value);
+    if (!next) throw new Error("类型名称不能为空");
+    if (next.length > 40) throw new Error("类型名称不能超过 40 个字符");
+    const previousKey = previous.toLocaleLowerCase();
+    const duplicate = this.data.readingTypes.find((item) => (
+      item.toLocaleLowerCase() === next.toLocaleLowerCase() && item.toLocaleLowerCase() !== previousKey
+    ));
+    if (duplicate) throw new Error(`已经存在类型“${duplicate}”`);
+    this.data.readingTypes = normalizeReadingTypes([
+      ...this.data.readingTypes.map((item) => item.toLocaleLowerCase() === previousKey ? next : item),
+      next,
+    ]);
+    for (const note of notes) {
+      await this.app.fileManager.processFrontMatter(note, (frontmatter) => {
+        const properties = frontmatter as Record<string, unknown>;
+        if (readingType(properties.type).toLocaleLowerCase() === previousKey) properties.type = next;
+      });
+    }
+    await this.saveData(this.data);
+    this.refreshReadingLog(true);
+    return next;
+  }
+
+  async deleteReadingType(value: string, notes: TFile[]): Promise<void> {
+    const key = value.toLocaleLowerCase();
+    this.data.readingTypes = this.data.readingTypes.filter((item) => item.toLocaleLowerCase() !== key);
+    for (const note of notes) {
+      await this.app.fileManager.processFrontMatter(note, (frontmatter) => {
+        const properties = frontmatter as Record<string, unknown>;
+        if (readingType(properties.type).toLocaleLowerCase() === key) delete properties.type;
+      });
+    }
+    await this.saveData(this.data);
+    this.refreshReadingLog(true);
+  }
+
   async updateRecordFolder(path: string): Promise<void> {
     const fallback = `${this.app.vault.configDir}/plugins/${this.manifest.id}/records`;
     const normalized = normalizeRecordFolder(path, fallback);
@@ -907,9 +972,9 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.refreshReadingLog();
   }
 
-  refreshReadingLog(): void {
+  refreshReadingLog(force = false): void {
     for (const leaf of this.app.workspace.getLeavesOfType(READING_LOG_VIEW)) {
-      if (leaf.view instanceof ReadingLogView) void leaf.view.refresh();
+      if (leaf.view instanceof ReadingLogView) void leaf.view.refresh(force);
     }
   }
 

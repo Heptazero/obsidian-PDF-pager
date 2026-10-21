@@ -14,11 +14,32 @@ export interface BookDaySummary {
 
 export const UNCLASSIFIED_READING_TYPE = "__unclassified__";
 
+export function normalizeReadingTypeName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized === UNCLASSIFIED_READING_TYPE || normalized === "*" ? "" : normalized;
+}
+
+export function normalizeReadingTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const type = normalizeReadingTypeName(item);
+    const key = type.toLocaleLowerCase();
+    if (!type || seen.has(key)) continue;
+    seen.add(key);
+    result.push(type);
+  }
+  return result;
+}
+
 export function readingType(value: unknown): string {
-  if (typeof value === "string" && value.trim()) return value.trim();
+  const direct = normalizeReadingTypeName(value);
+  if (direct) return direct;
   if (Array.isArray(value)) {
-    const first = value.find((item): item is string => typeof item === "string" && item.trim().length > 0);
-    if (first) return first.trim();
+    const first = normalizeReadingTypes(value)[0];
+    if (first) return first;
   }
   return UNCLASSIFIED_READING_TYPE;
 }

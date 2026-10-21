@@ -1,7 +1,8 @@
-import { FuzzySuggestModal, ItemView, Notice, TFile, type App, type WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, ItemView, Modal, Notice, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import {
-  aggregateReadingSessions, formatDuration, localDayKey, monthDays, pageRange, readingType, settlementStatus, shiftDay,
-  UNCLASSIFIED_READING_TYPE, weekDays, type BookDaySummary, type SettlementStatus,
+  aggregateReadingSessions, formatDuration, localDayKey, monthDays, normalizeReadingTypeName, normalizeReadingTypes,
+  pageRange, readingType, settlementStatus, shiftDay, UNCLASSIFIED_READING_TYPE, weekDays, type BookDaySummary,
+  type SettlementStatus,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -20,6 +21,11 @@ export interface ReadingLogHost {
   settleReadingDay(day: string, pdfPaths?: string[]): Promise<SettlementResult>;
   openReadingNote(note: TFile, day?: string, pdfPath?: string): Promise<void>;
   openPdf(pdfPath: string): Promise<void>;
+  getReadingTypes(): string[];
+  addReadingType(value: string): Promise<string>;
+  setReadingNoteType(note: TFile, value: string | null): Promise<void>;
+  renameReadingType(previous: string, value: string, notes: TFile[]): Promise<string>;
+  deleteReadingType(value: string, notes: TFile[]): Promise<void>;
   getReadingLogPreferences(): { sessionMergeMinutes: number; dayEndMinutes: number; mobileLogBottomPadding: number };
 }
 
@@ -85,6 +91,201 @@ class NoteSuggestModal extends FuzzySuggestModal<TFile> {
   onChooseItem(item: TFile): void { this.onChoose(item); }
 }
 
+type TypeChoice = { kind: "type"; value: string } | { kind: "clear" } | { kind: "create" };
+
+class TypeSuggestModal extends FuzzySuggestModal<TypeChoice> {
+  private choices: TypeChoice[];
+
+  constructor(app: App, types: string[], current: string, private choose: (choice: TypeChoice) => void) {
+    super(app);
+    this.setPlaceholder("模糊搜索或选择 type");
+    const ordered = [...types].sort((a, b) => {
+      if (a === current) return -1;
+      if (b === current) return 1;
+      return typeLabel(a).localeCompare(typeLabel(b), "zh-CN");
+    });
+    this.choices = [
+      ...ordered.map((value): TypeChoice => ({ kind: "type", value })),
+      { kind: "clear" },
+      { kind: "create" },
+    ];
+  }
+
+  getItems(): TypeChoice[] { return this.choices; }
+  getItemText(choice: TypeChoice): string {
+    if (choice.kind === "clear") return "未分类  移除 type 属性";
+    if (choice.kind === "create") return "＋ 新建 type";
+    return `${typeLabel(choice.value)}  ${choice.value}`;
+  }
+  onChooseItem(choice: TypeChoice): void { this.choose(choice); }
+}
+
+class TypeNameModal extends Modal {
+  constructor(
+    app: App,
+    private title: string,
+    private initialValue: string,
+    private help: string,
+    private submit: (value: string) => Promise<void>,
+  ) { super(app); }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h3", { text: this.title });
+    const form = this.contentEl.createEl("form", { cls: "pdf-pager-type-name-form" });
+    const input = form.createEl("input", {
+      cls: "pdf-pager-type-name-input",
+      type: "text",
+      value: this.initialValue,
+      attr: { placeholder: "例如 book、paper", "aria-label": this.title, maxlength: "40" },
+    });
+    form.createDiv({ cls: "pdf-pager-type-name-help", text: this.help });
+    const actions = form.createDiv("pdf-pager-type-modal-actions");
+    const cancel = actions.createEl("button", { text: "取消", attr: { type: "button" } });
+    cancel.addEventListener("click", () => this.close());
+    const save = actions.createEl("button", { cls: "mod-cta", text: "保存", attr: { type: "submit" } });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      void this.submit(input.value).then(() => this.close()).catch((error) => {
+        save.disabled = false;
+        new Notice(String(error instanceof Error ? error.message : error));
+      });
+    });
+    window.setTimeout(() => { input.focus(); input.select(); }, 0);
+  }
+}
+
+class TypeDeleteModal extends Modal {
+  constructor(
+    app: App,
+    private type: string,
+    private noteCount: number,
+    private confirmDelete: () => Promise<void>,
+  ) { super(app); }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h3", { text: `删除“${typeLabel(this.type)}”？` });
+    this.contentEl.createDiv({
+      cls: "pdf-pager-type-delete-message",
+      text: this.noteCount > 0
+        ? `会从 ${this.noteCount} 篇已关联笔记中移除 type 属性，阅读记录不会删除。`
+        : "只会删除这个自定义类型，阅读记录不会删除。",
+    });
+    const actions = this.contentEl.createDiv("pdf-pager-type-modal-actions");
+    const cancel = actions.createEl("button", { text: "取消" });
+    cancel.addEventListener("click", () => this.close());
+    const remove = actions.createEl("button", { cls: "mod-warning", text: "删除" });
+    remove.addEventListener("click", () => {
+      remove.disabled = true;
+      void this.confirmDelete().then(() => this.close()).catch((error) => {
+        remove.disabled = false;
+        new Notice(String(error instanceof Error ? error.message : error));
+      });
+    });
+  }
+}
+
+interface TypeManagerEntry { value: string; noteCount: number }
+
+function fuzzyContains(value: string, query: string): boolean {
+  const haystack = value.toLocaleLowerCase();
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle || haystack.includes(needle)) return true;
+  let index = 0;
+  for (const char of haystack) if (char === needle[index]) index += 1;
+  return index === needle.length;
+}
+
+class TypeManagerModal extends Modal {
+  private query = "";
+  private listEl!: HTMLElement;
+  private inputEl!: HTMLInputElement;
+
+  constructor(
+    app: App,
+    private entries: TypeManagerEntry[],
+    private add: (value: string) => Promise<string>,
+    private rename: (previous: string, value: string) => Promise<string>,
+    private remove: (value: string) => Promise<void>,
+  ) { super(app); }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.addClass("pdf-pager-type-manager");
+    this.contentEl.createEl("h3", { text: "管理阅读类型" });
+    const createRow = this.contentEl.createDiv("pdf-pager-type-create-row");
+    this.inputEl = createRow.createEl("input", {
+      type: "search",
+      attr: { placeholder: "搜索或输入新 type", "aria-label": "搜索或输入新 type", maxlength: "40" },
+    });
+    const addButton = createRow.createEl("button", { cls: "mod-cta", text: "新增" });
+    this.listEl = this.contentEl.createDiv("pdf-pager-type-manager-list");
+    this.inputEl.addEventListener("input", () => {
+      this.query = this.inputEl.value;
+      this.renderList();
+    });
+    const create = () => {
+      const value = this.inputEl.value;
+      addButton.disabled = true;
+      void this.add(value).then((type) => {
+        if (!this.entries.some((entry) => entry.value.toLocaleLowerCase() === type.toLocaleLowerCase())) {
+          this.entries.push({ value: type, noteCount: 0 });
+        }
+        this.inputEl.value = "";
+        this.query = "";
+        this.renderList();
+      }).catch((error) => new Notice(String(error instanceof Error ? error.message : error)))
+        .finally(() => { addButton.disabled = false; });
+    };
+    addButton.addEventListener("click", create);
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      create();
+    });
+    this.renderList();
+    window.setTimeout(() => this.inputEl.focus(), 0);
+  }
+
+  private renderList(): void {
+    this.listEl.empty();
+    const matches = this.entries
+      .filter((entry) => fuzzyContains(`${typeLabel(entry.value)} ${entry.value}`, this.query))
+      .sort((a, b) => typeLabel(a.value).localeCompare(typeLabel(b.value), "zh-CN"));
+    if (matches.length === 0) {
+      this.listEl.createDiv({ cls: "pdf-pager-log-empty", text: "没有匹配类型；可直接新增" });
+      return;
+    }
+    for (const entry of matches) {
+      const row = this.listEl.createDiv("pdf-pager-type-manager-row");
+      const label = row.createDiv("pdf-pager-type-manager-label");
+      label.createSpan({ text: typeLabel(entry.value) });
+      label.createSpan({ cls: "pdf-pager-type-manager-raw", text: entry.value });
+      row.createSpan({ cls: "pdf-pager-type-manager-count", text: `${entry.noteCount} 篇` });
+      const edit = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": `重命名 ${entry.value}`, title: "重命名" } });
+      setIcon(edit, "pencil");
+      edit.addEventListener("click", () => {
+        new TypeNameModal(this.app, "重命名类型", entry.value, `会同步修改 ${entry.noteCount} 篇已关联笔记。`, async (value) => {
+          const renamed = await this.rename(entry.value, value);
+          entry.value = renamed;
+          this.renderList();
+        }).open();
+      });
+      const remove = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": `删除 ${entry.value}`, title: "删除" } });
+      setIcon(remove, "trash-2");
+      remove.addEventListener("click", () => {
+        new TypeDeleteModal(this.app, entry.value, entry.noteCount, async () => {
+          await this.remove(entry.value);
+          this.entries = this.entries.filter((item) => item !== entry);
+          this.renderList();
+        }).open();
+      });
+    }
+  }
+}
+
 export class ReadingLogView extends ItemView {
   private revision = 0;
   private lastSignature = "";
@@ -93,6 +294,8 @@ export class ReadingLogView extends ItemView {
   private sectionStorageKey: string;
   private typeStorageKey: string;
   private selectedType: string;
+  private availableTypes: string[] = [];
+  private typeNotes = new Map<string, TFile[]>();
 
   constructor(leaf: WorkspaceLeaf, private host: ReadingLogHost) {
     super(leaf);
@@ -130,7 +333,8 @@ export class ReadingLogView extends ItemView {
       root.createDiv({ cls: "pdf-pager-log-loading", text: "正在汇总阅读记录…" });
     }
     const sessions = await this.host.store.readingSessions();
-    const signature = `${preferences.sessionMergeMinutes}|${preferences.dayEndMinutes}|${preferences.mobileLogBottomPadding}|` + sessions.map((session) => [
+    const configuredTypes = this.host.getReadingTypes();
+    const signature = `${preferences.sessionMergeMinutes}|${preferences.dayEndMinutes}|${preferences.mobileLogBottomPadding}|${configuredTypes.join("\u001f")}|` + sessions.map((session) => [
       session.id, session.pdfPath, session.day, session.updatedAt, session.durationMs,
       session.startPage, session.endPage,
     ].join(":")).join("|");
@@ -149,11 +353,18 @@ export class ReadingLogView extends ItemView {
       return { summary, note, status: settlementStatus(content, summary), type: readingType(frontmatter?.type) };
     }));
     if (revision !== this.revision) return;
-    const types = [...new Set(resolved.map((item) => item.type))].sort((a, b) => {
+    const discoveredTypes = resolved.map((item) => item.type).filter((type) => type !== UNCLASSIFIED_READING_TYPE);
+    const types = [...normalizeReadingTypes([...configuredTypes, ...discoveredTypes]), UNCLASSIFIED_READING_TYPE].sort((a, b) => {
       if (a === UNCLASSIFIED_READING_TYPE) return 1;
       if (b === UNCLASSIFIED_READING_TYPE) return -1;
       return a.localeCompare(b, "zh-CN");
     });
+    const canonicalTypes = new Map(types.map((type) => [type.toLocaleLowerCase(), type]));
+    for (const item of resolved) {
+      if (item.type !== UNCLASSIFIED_READING_TYPE) item.type = canonicalTypes.get(item.type.toLocaleLowerCase()) ?? item.type;
+    }
+    this.availableTypes = types.filter((type) => type !== UNCLASSIFIED_READING_TYPE);
+    this.typeNotes = this.collectTypeNotes(resolved);
     if (this.selectedType !== "*" && !types.includes(this.selectedType)) this.selectedType = "*";
     const visible = this.selectedType === "*" ? resolved : resolved.filter((item) => item.type === this.selectedType);
     root.empty();
@@ -179,7 +390,8 @@ export class ReadingLogView extends ItemView {
   }
 
   private renderTypeTabs(root: HTMLElement, types: string[]): void {
-    const tabs = root.createDiv({
+    const bar = root.createDiv("pdf-pager-log-type-bar");
+    const tabs = bar.createDiv({
       cls: "pdf-pager-log-type-tabs",
       attr: { role: "tablist", "aria-label": "按笔记 type 筛选阅读统计" },
     });
@@ -201,6 +413,12 @@ export class ReadingLogView extends ItemView {
         void this.refresh(true);
       });
     }
+    const manage = bar.createEl("button", {
+      cls: "pdf-pager-log-type-manage clickable-icon",
+      attr: { "aria-label": "新增和管理阅读类型", title: "新增和管理类型" },
+    });
+    setIcon(manage, "plus");
+    manage.addEventListener("click", () => this.manageTypes());
   }
 
   private renderDay(
@@ -247,6 +465,16 @@ export class ReadingLogView extends ItemView {
     const metrics = heading.createDiv("pdf-pager-log-book-metrics");
     metrics.createSpan({ cls: "pdf-pager-log-book-duration", text: formatDuration(summary.durationMs) });
     metrics.createSpan({ cls: "pdf-pager-log-book-pages", text: pageRange(summary).slice(1, -1).replace("-", "–") + " 页" });
+
+    const typeButton = card.createEl("button", {
+      cls: item.type === UNCLASSIFIED_READING_TYPE ? "pdf-pager-log-book-type is-unclassified" : "pdf-pager-log-book-type",
+      text: typeLabel(item.type),
+      attr: { title: note ? `选择 ${note.basename} 的 type` : "请先关联笔记" },
+    });
+    typeButton.addEventListener("click", () => {
+      if (!note) { new Notice("请先为这个 PDF 关联笔记"); return; }
+      this.chooseType(note, item.type);
+    });
 
     const noteRow = card.createDiv("pdf-pager-log-note-row");
     noteRow.createSpan({ cls: "pdf-pager-log-note-label", text: "日志：" });
@@ -391,6 +619,71 @@ export class ReadingLogView extends ItemView {
     new NoteSuggestModal(this.app, pdfPath, (note) => {
       void this.host.linkReadingNote(pdfPath, note).then(() => this.refresh(true));
     }).open();
+  }
+
+  private chooseType(note: TFile, current: string): void {
+    new TypeSuggestModal(this.app, this.availableTypes, current, (choice) => {
+      if (choice.kind === "type") {
+        void this.host.setReadingNoteType(note, choice.value).then(() => this.refresh(true));
+      } else if (choice.kind === "clear") {
+        void this.host.setReadingNoteType(note, null).then(() => this.refresh(true));
+      } else {
+        new TypeNameModal(this.app, "新增并选择类型", "", "新类型会加入顶部筛选，并写入当前笔记的 type 属性。", async (value) => {
+          const type = await this.host.addReadingType(value);
+          await this.host.setReadingNoteType(note, type);
+          await this.refresh(true);
+        }).open();
+      }
+    }).open();
+  }
+
+  private collectTypeNotes(items: ResolvedSummary[]): Map<string, TFile[]> {
+    const grouped = new Map<string, Map<string, TFile>>();
+    for (const item of items) {
+      if (!item.note || item.type === UNCLASSIFIED_READING_TYPE) continue;
+      const notes = grouped.get(item.type) ?? new Map<string, TFile>();
+      notes.set(item.note.path, item.note);
+      grouped.set(item.type, notes);
+    }
+    return new Map([...grouped].map(([type, notes]) => [type, [...notes.values()]]));
+  }
+
+  private manageTypes(): void {
+    const entries = this.availableTypes.map((value) => ({ value, noteCount: this.typeNotes.get(value)?.length ?? 0 }));
+    new TypeManagerModal(
+      this.app,
+      entries,
+      async (value) => {
+        const type = await this.host.addReadingType(value);
+        await this.refresh(true);
+        return type;
+      },
+      async (previous, value) => {
+        const normalized = normalizeReadingTypeName(value);
+        const duplicate = this.availableTypes.find((type) => (
+          type.toLocaleLowerCase() === normalized.toLocaleLowerCase()
+          && type.toLocaleLowerCase() !== previous.toLocaleLowerCase()
+        ));
+        if (duplicate) throw new Error(`已经存在类型“${duplicate}”`);
+        const notes = this.typeNotes.get(previous) ?? [];
+        const next = await this.host.renameReadingType(previous, value, notes);
+        if (this.selectedType === previous) {
+          this.selectedType = next;
+          this.host.app.saveLocalStorage(this.typeStorageKey, next);
+        }
+        await this.refresh(true);
+        return next;
+      },
+      async (value) => {
+        const notes = this.typeNotes.get(value) ?? [];
+        if (this.selectedType === value) {
+          this.selectedType = "*";
+          this.host.app.saveLocalStorage(this.typeStorageKey, "*");
+        }
+        await this.host.deleteReadingType(value, notes);
+        await this.refresh(true);
+      },
+    ).open();
   }
 
   private rememberSection(key: string, open: boolean): void {

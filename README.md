@@ -50,7 +50,7 @@ PDF Pager records active reading sessions, groups nearby sessions for display, a
 - Pauses after a configurable idle period and can visually merge nearby sessions without counting the gap as reading time.
 - Lets users choose when a reading day ends, so after-midnight sessions can remain part of the previous day.
 - Shows foldable daily history plus color-coded weekly and monthly charts, including daily-average lines.
-- Filters the full log and its charts by the linked note's `type` property, with separate tabs for books, papers, and other discovered types.
+- Filters the full log and its charts by the linked note's `type` property. Types can be searched, created, renamed, deleted, and assigned with fuzzy search directly from the log view.
 - Marks each book-day as settled, changed, or unsettled and lets users settle any earlier reading day.
 - Opens the PDF from the book title and the linked Markdown log from the compact log row.
 - Links a PDF to the Markdown note that references it and can jump directly to that note's `## log` section or settled date.
@@ -86,7 +86,7 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 
 插件自动记录聚焦 PDF 的阅读时段；切换标签页或应用进入后台时暂停。默认连续 5 分钟无操作后暂停，也可在设置中改为 10、15 或 30 分钟。
 
-左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。顶部标签按关联笔记的 `type` 属性筛选全部内容；常见的 `book` 和 `paper` 分别显示为“书籍”和“论文”，其他 type 原样显示，没有 type 或未关联的记录归入“未分类”。今天、昨天、更早、本周和本月均可折叠；更早日期可以逐日展开和结算。本周与本月按天显示阅读时长，以不同颜色区分书籍，并用虚线标出截至当天的日均时长。本月标题还显示本月阅读天数。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
+左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。顶部标签按关联笔记的 `type` 属性筛选全部内容；常见的 `book` 和 `paper` 分别显示为“书籍”和“论文”，其他 type 原样显示，没有 type 或未关联的记录归入“未分类”。顶部的加号可以搜索、新增、重命名和删除类型；卡片上的类型标签使用模糊搜索选择，并把结果写回关联 Markdown 笔记的 `type` 属性。删除类型只移除相关笔记的 type，不删除阅读记录。今天、昨天、更早、本周和本月均可折叠；更早日期可以逐日展开和结算。本周与本月按天显示阅读时长，以不同颜色区分书籍，并用虚线标出截至当天的日均时长。本月标题还显示本月阅读天数。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
 
 “结算今天”或历史日期里的结算按钮会把当天总时长和起止页写入关联书籍笔记的 `## log`，例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；日志卡片据此显示“已结算”，之后继续阅读并使结算内容发生变化时显示“需更新”。再次结算会覆盖当天总数，并保留下面缩进的感想。
 

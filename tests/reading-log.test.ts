@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, readingType, settlementBlockId,
-  settlementMarker, settlementStatus, UNCLASSIFIED_READING_TYPE, upsertDailySettlement, weekDays,
+  aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, normalizeReadingTypes,
+  readingType, settlementBlockId, settlementMarker, settlementStatus, UNCLASSIFIED_READING_TYPE,
+  upsertDailySettlement, weekDays,
   type BookDaySummary,
 } from "../src/reading-log.ts";
 import type { StoredReadingSession } from "../src/state-store.ts";
@@ -94,6 +95,10 @@ test("reading type follows note frontmatter and keeps missing values separate", 
   assert.equal(readingType(["paper", "reference"]), "paper");
   assert.equal(readingType(undefined), UNCLASSIFIED_READING_TYPE);
   assert.equal(readingType([]), UNCLASSIFIED_READING_TYPE);
+});
+
+test("custom reading types are trimmed, deduplicated, and reject reserved values", () => {
+  assert.deepEqual(normalizeReadingTypes([" book ", "BOOK", "paper", "", "*", UNCLASSIFIED_READING_TYPE]), ["book", "paper"]);
 });
 
 test("settlement status distinguishes settled, changed, and new records", () => {
