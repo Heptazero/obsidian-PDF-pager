@@ -727,7 +727,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.data = {
       version: 5,
       noteLinks: saved.noteLinks && typeof saved.noteLinks === "object" ? { ...saved.noteLinks } : {},
-      readingTypes: normalizeReadingTypes(saved.readingTypes ?? ["book", "paper"]),
+      readingTypes: normalizeReadingTypes(saved.readingTypes ?? []),
       recordFolder,
       idleMinutes,
       sessionMergeMinutes,

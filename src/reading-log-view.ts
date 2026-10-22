@@ -1,8 +1,8 @@
 import { FuzzySuggestModal, ItemView, Modal, Notice, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import {
   aggregateReadingSessions, formatDuration, localDayKey, monthDays, normalizeReadingTypeName, normalizeReadingTypes,
-  pageRange, readingType, settlementStatus, shiftDay, UNCLASSIFIED_READING_TYPE, weekDays, type BookDaySummary,
-  type SettlementStatus,
+  pageRange, readingType, readingTypeValues, settlementStatus, shiftDay, UNCLASSIFIED_READING_TYPE, weekDays,
+  type BookDaySummary, type SettlementStatus,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
 
@@ -67,8 +67,6 @@ function statusLabel(status: ResolvedSummary["status"]): string {
 }
 
 function typeLabel(type: string): string {
-  if (type === "book") return "书籍";
-  if (type === "paper") return "论文";
   if (type === UNCLASSIFIED_READING_TYPE) return "未分类";
   return type;
 }
@@ -206,6 +204,7 @@ class TypeManagerModal extends Modal {
   constructor(
     app: App,
     private entries: TypeManagerEntry[],
+    private suggestions: string[],
     private add: (value: string) => Promise<string>,
     private rename: (previous: string, value: string) => Promise<string>,
     private remove: (value: string) => Promise<void>,
@@ -254,15 +253,23 @@ class TypeManagerModal extends Modal {
     const matches = this.entries
       .filter((entry) => fuzzyContains(`${typeLabel(entry.value)} ${entry.value}`, this.query))
       .sort((a, b) => typeLabel(a.value).localeCompare(typeLabel(b.value), "zh-CN"));
-    if (matches.length === 0) {
-      this.listEl.createDiv({ cls: "pdf-pager-log-empty", text: "没有匹配类型；可直接新增" });
+    const existing = new Set(this.entries.map((entry) => entry.value.toLocaleLowerCase()));
+    const suggestions = this.query.trim() ? this.suggestions
+      .filter((value) => !existing.has(value.toLocaleLowerCase()))
+      .filter((value) => fuzzyContains(value, this.query))
+      .sort((a, b) => a.localeCompare(b, "zh-CN"))
+      .slice(0, 20) : [];
+    if (matches.length === 0 && suggestions.length === 0) {
+      this.listEl.createDiv({
+        cls: "pdf-pager-log-empty",
+        text: this.query.trim() ? "没有匹配类型；可直接新增" : "暂无已管理类型",
+      });
       return;
     }
     for (const entry of matches) {
       const row = this.listEl.createDiv("pdf-pager-type-manager-row");
       const label = row.createDiv("pdf-pager-type-manager-label");
       label.createSpan({ text: typeLabel(entry.value) });
-      label.createSpan({ cls: "pdf-pager-type-manager-raw", text: entry.value });
       row.createSpan({ cls: "pdf-pager-type-manager-count", text: `${entry.noteCount} 篇` });
       const edit = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": `重命名 ${entry.value}`, title: "重命名" } });
       setIcon(edit, "pencil");
@@ -283,6 +290,21 @@ class TypeManagerModal extends Modal {
         }).open();
       });
     }
+    for (const value of suggestions) {
+      const row = this.listEl.createDiv("pdf-pager-type-manager-row is-suggestion");
+      const label = row.createDiv("pdf-pager-type-manager-label");
+      label.createSpan({ text: value });
+      label.createSpan({ cls: "pdf-pager-type-manager-raw", text: "Vault 中已有" });
+      const use = row.createEl("button", { text: "添加" });
+      use.addEventListener("click", () => {
+        use.disabled = true;
+        void this.add(value).then((type) => {
+          this.entries.push({ value: type, noteCount: 0 });
+          this.renderList();
+        }).catch((error) => new Notice(String(error instanceof Error ? error.message : error)))
+          .finally(() => { use.disabled = false; });
+      });
+    }
   }
 }
 
@@ -295,6 +317,7 @@ export class ReadingLogView extends ItemView {
   private typeStorageKey: string;
   private selectedType: string;
   private availableTypes: string[] = [];
+  private vaultTypes: string[] = [];
   private typeNotes = new Map<string, TFile[]>();
 
   constructor(leaf: WorkspaceLeaf, private host: ReadingLogHost) {
@@ -334,6 +357,7 @@ export class ReadingLogView extends ItemView {
     }
     const sessions = await this.host.store.readingSessions();
     const configuredTypes = this.host.getReadingTypes();
+    this.vaultTypes = this.collectVaultTypes();
     const signature = `${preferences.sessionMergeMinutes}|${preferences.dayEndMinutes}|${preferences.mobileLogBottomPadding}|${configuredTypes.join("\u001f")}|` + sessions.map((session) => [
       session.id, session.pdfPath, session.day, session.updatedAt, session.durationMs,
       session.startPage, session.endPage,
@@ -622,7 +646,7 @@ export class ReadingLogView extends ItemView {
   }
 
   private chooseType(note: TFile, current: string): void {
-    new TypeSuggestModal(this.app, this.availableTypes, current, (choice) => {
+    new TypeSuggestModal(this.app, normalizeReadingTypes([...this.availableTypes, ...this.vaultTypes]), current, (choice) => {
       if (choice.kind === "type") {
         void this.host.setReadingNoteType(note, choice.value).then(() => this.refresh(true));
       } else if (choice.kind === "clear") {
@@ -648,11 +672,21 @@ export class ReadingLogView extends ItemView {
     return new Map([...grouped].map(([type, notes]) => [type, [...notes.values()]]));
   }
 
+  private collectVaultTypes(): string[] {
+    const values: string[] = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      values.push(...readingTypeValues(frontmatter?.type));
+    }
+    return normalizeReadingTypes(values);
+  }
+
   private manageTypes(): void {
     const entries = this.availableTypes.map((value) => ({ value, noteCount: this.typeNotes.get(value)?.length ?? 0 }));
     new TypeManagerModal(
       this.app,
       entries,
+      this.vaultTypes,
       async (value) => {
         const type = await this.host.addReadingType(value);
         await this.refresh(true);

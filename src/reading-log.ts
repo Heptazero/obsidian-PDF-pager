@@ -34,14 +34,12 @@ export function normalizeReadingTypes(value: unknown): string[] {
   return result;
 }
 
+export function readingTypeValues(value: unknown): string[] {
+  return normalizeReadingTypes(Array.isArray(value) ? value : [value]);
+}
+
 export function readingType(value: unknown): string {
-  const direct = normalizeReadingTypeName(value);
-  if (direct) return direct;
-  if (Array.isArray(value)) {
-    const first = normalizeReadingTypes(value)[0];
-    if (first) return first;
-  }
-  return UNCLASSIFIED_READING_TYPE;
+  return readingTypeValues(value)[0] ?? UNCLASSIFIED_READING_TYPE;
 }
 
 function pad(value: number): string {

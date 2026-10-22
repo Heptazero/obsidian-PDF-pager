@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   aggregateReadingSessions, formatHourToken, localDayKey, mergeNearbySessions, monthDays, normalizeReadingTypes,
-  readingType, settlementBlockId, settlementMarker, settlementStatus, UNCLASSIFIED_READING_TYPE,
+  readingType, readingTypeValues, settlementBlockId, settlementMarker, settlementStatus, UNCLASSIFIED_READING_TYPE,
   upsertDailySettlement, weekDays,
   type BookDaySummary,
 } from "../src/reading-log.ts";
@@ -99,6 +99,7 @@ test("reading type follows note frontmatter and keeps missing values separate", 
 
 test("custom reading types are trimmed, deduplicated, and reject reserved values", () => {
   assert.deepEqual(normalizeReadingTypes([" book ", "BOOK", "paper", "", "*", UNCLASSIFIED_READING_TYPE]), ["book", "paper"]);
+  assert.deepEqual(readingTypeValues([" api ", "project", "API"]), ["api", "project"]);
 });
 
 test("settlement status distinguishes settled, changed, and new records", () => {
