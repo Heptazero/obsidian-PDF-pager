@@ -1,9 +1,9 @@
 {
   "id": "pdf-pager-hz",
-  "name": "PDF Pager",
+  "name": "Pager HZ",
   "version": "0.1.12",
   "minAppVersion": "1.8.7",
-  "description": "Read PDFs page by page with mobile landscape paging, synced progress, bookmarks, and daily reading logs.",
+  "description": "Read PDF and EPUB page by page with mobile layouts, synced progress, bookmarks, and reading logs.",
   "author": "heptazero",
   "authorUrl": "https://github.com/Heptazero",
   "isDesktopOnly": false

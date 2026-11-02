@@ -1,30 +1,32 @@
-# PDF Pager
+# Pager HZ
 
-**PDF Pager is an Obsidian PDF reader plugin for reading PDFs one page at a time instead of continuous scrolling.** It is designed around mobile landscape reading: one PDF page stays centered, tall portrait pages can be divided into screen-sized reading stops, and pinch zoom recalculates those stops without modifying the PDF.
+**Pager HZ is an Obsidian PDF and EPUB reader plugin for reading one screen at a time instead of continuous scrolling.** It is designed around mobile landscape reading: one PDF page stays centered, tall portrait pages can be divided into screen-sized reading stops, and pinch zoom recalculates those stops without modifying the PDF.
 
 It also remembers the page and in-page position after rotation or reopening, provides bookmarks and reading-time logs, and stores syncable reading records inside the vault. Per-device records are merged so that opening the same PDF on another device is less likely to overwrite newer progress.
 
 The built-in EPUB reader uses EPUB.js for single-screen pagination, adjustable margins and typography, text-based resume positions, bookmarks, and the same synced reading log. It does not require a separate EPUB reader plugin.
 
-> 中文简介：PDF Pager 是一个面向 Obsidian 手机横屏阅读的 PDF 单页翻页插件。它支持一屏一屏翻页、旋转后保持位置、双指缩放、跨设备续读、书签和阅读时长日志。
+> 中文简介：Pager HZ 是一个面向 Obsidian 手机阅读的 PDF 与 EPUB 阅读器。它支持逐屏翻页、旋转后续读、跨设备进度、书签和阅读日志；PDF 可双指缩放，EPUB 可调整字号和边距。
 
-## Does PDF Pager solve this problem?
+Formerly **PDF Pager**. The plugin ID remains `pdf-pager-hz`, so existing installations, hotkeys, and reading records continue to use the same storage and identifiers.
+
+## Does Pager HZ solve this problem?
 
 ### How can I read a PDF page by page in Obsidian instead of continuously scrolling?
 
-PDF Pager keeps one PDF page centered and turns navigation into previous/next screen or page actions. It works in Obsidian's existing PDF tab rather than importing or rewriting the PDF.
+Pager HZ keeps one PDF page centered and turns navigation into previous/next screen or page actions. It works in Obsidian's existing PDF tab rather than importing or rewriting the PDF.
 
 ### Is there an Obsidian PDF plugin for mobile landscape reading?
 
-Yes. On a phone in landscape orientation, PDF Pager can divide a tall portrait PDF page into screen-sized stops. The final stop may be shorter, and visible guide lines show the boundaries. Pinch zoom recalculates the stops from the current rendered size.
+Yes. On a phone in landscape orientation, Pager HZ can divide a tall portrait PDF page into screen-sized stops. The final stop may be shorter, and visible guide lines show the boundaries. Pinch zoom recalculates the stops from the current rendered size.
 
 ### Can Obsidian remember and sync my PDF reading position across devices?
 
-PDF Pager saves the page, in-page position, bookmarks, and reading sessions as JSON files in a configurable vault folder. If a vault sync tool includes that folder, the plugin merges records from each device and resumes from the newest known position. Explicit `#page=` PDF links still take priority.
+Pager HZ saves the page, in-page position, bookmarks, and reading sessions as JSON files in a configurable vault folder. If a vault sync tool includes that folder, the plugin merges records from each device and resumes from the newest known position. Explicit `#page=` PDF links still take priority.
 
 ### Can Obsidian track PDF reading time and daily reading logs?
 
-PDF Pager records active reading sessions, groups nearby sessions for display, and shows today, yesterday, and this week in a foldable log view. A manual **Settle today** action writes the day's total time and page range into the linked book note under `## log`; settling again updates the same dated row.
+Pager HZ records active reading sessions, groups nearby sessions for display, and shows today, yesterday, and this week in a foldable log view. A manual **Settle today** action writes the day's total time and page range into the linked book note under `## log`; settling again updates the same dated row.
 
 ## Core features
 
@@ -36,7 +38,7 @@ PDF Pager records active reading sessions, groups nearby sessions for display, a
 - Uses a configurable minimum page width: pinch to zoom in freely, then zoom out only to the selected floor.
 - Provides previous/next screen controls, page-number input, keyboard shortcuts, and Obsidian commands.
 - Keeps navigation controls away from the PDF text area so text selection and dictionary plugins can still receive taps.
-- Includes a PDF-only Zen mode that leaves only the PDF page, PDF Pager controls, and the floating exit button visible. It hides Obsidian navigation chrome, the native PDF toolbar, search bar, thumbnail sidebar, and scrollbars while the focused PDF tab is active. The floating button or `Escape` restores the interface.
+- Includes a PDF-only Zen mode that leaves only the PDF page, Pager HZ controls, and the floating exit button visible. It hides Obsidian navigation chrome, the native PDF toolbar, search bar, thumbnail sidebar, and scrollbars while the focused PDF tab is active. The floating button or `Escape` restores the interface.
 
 ### Reading position, bookmarks, and cross-device records
 
@@ -68,7 +70,7 @@ PDF Pager records active reading sessions, groups nearby sessions for display, a
 
 ### Obsidian PDF 怎么改成单页翻页，不连续滚动？
 
-PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 PDF 页面。底部按钮、移动端侧边控制栏、键盘快捷键和 Obsidian 命令都可以翻到上一屏或下一屏；不需要转换 PDF，也不会修改原文件。
+Pager HZ 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 PDF 页面。底部按钮、移动端侧边控制栏、键盘快捷键和 Obsidian 命令都可以翻到上一屏或下一屏；不需要转换 PDF，也不会修改原文件。
 
 ### Obsidian 手机横屏看 PDF，怎么一屏一屏翻页？
 
@@ -80,7 +82,7 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 
 普通打开 PDF 时，插件恢复最近一次阅读页和页内位置；显式 PDF 页码链接优先。进度只在聚焦的 PDF 标签页实际翻页后保存，避免关闭后台标签页时用旧位置覆盖记录。
 
-进度、书签和原始阅读时段按 PDF、按设备分别存成 JSON，读取时合并。默认目录是 `.obsidian/plugins/pdf-pager-hz/records/`；可在 PDF Pager 设置中改成任意 Vault 内文件夹，例如 `99_assets/plugin-data/reading-records`。两台设备设置相同目录，并让同步软件包含该目录后，插件会从已同步记录中选择更新的位置。
+进度、书签和原始阅读时段按 PDF、按设备分别存成 JSON，读取时合并。默认目录是 `.obsidian/plugins/pdf-pager-hz/records/`；可在 Pager HZ 设置中改成任意 Vault 内文件夹，例如 `99_assets/plugin-data/reading-records`。两台设备设置相同目录，并让同步软件包含该目录后，插件会从已同步记录中选择更新的位置。
 
 记录文件使用“PDF 名称 + 路径标识 + 设备标识”命名，例如 `盲视__141e6635ab363461__设备-xxxxxxxxxxxxxxxx.json`。路径和设备标识用于区分同名 PDF 及不同设备。升级后会自动迁移旧的纯哈希文件名，不改变记录内容；修改目录时会复制已发现的旧记录，不删除原文件。从 `0.1.7` 起，插件仍兼容旧版 `99_assets/plugin-data/pdf-pager/` 中的记录。
 
@@ -103,11 +105,11 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 - 宽度滑块设置页面的最小显示宽度。双指可以继续放大，缩小到这个下限即停止；拖动滑块时保留高于下限的双指放大倍率。“适合整页”和“适合宽度”会重置适配基准。
 - 移动端宽度面板会居中并隔离边缘拖动，避免误展开 Obsidian 侧边栏。
 - 移动端日志页提供可调底部留白，横屏和竖屏均可避开 Obsidian 底部工具栏。
-- PDF 顶部动作或命令“PDF：切换专注模式”会进入真正的 PDF Zen 模式：只保留 PDF 页面、PDF Pager 翻页控件和右上角退出按钮；隐藏 Obsidian 的返回/前进与文件标题栏、标签栏、左右侧栏、Ribbon、状态栏、移动端导航，以及原生 PDF 工具栏、搜索栏、缩略图侧栏和滚动条。该模式只在对应 PDF 标签页激活时生效；切到其他页面会恢复界面，返回 PDF 后继续。桌面端也可按 `Esc` 退出。
+- PDF 顶部动作或命令“PDF：切换专注模式”会进入真正的 PDF Zen 模式：只保留 PDF 页面、Pager HZ 翻页控件和右上角退出按钮；隐藏 Obsidian 的返回/前进与文件标题栏、标签栏、左右侧栏、Ribbon、状态栏、移动端导航，以及原生 PDF 工具栏、搜索栏、缩略图侧栏和滚动条。该模式只在对应 PDF 标签页激活时生效；切到其他页面会恢复界面，返回 PDF 后继续。桌面端也可按 `Esc` 退出。
 
 ## EPUB 阅读（本地开发版）
 
-重新加载 PDF Pager 后，点击侧栏的书本按钮，或执行 **PDF Pager：打开电子书**，搜索 Vault 内的 `.epub` 文件。若安装了其他 EPUB 插件，使用这个入口可明确选择 Pager 阅读器；没有其他插件注册该扩展名时，也可以直接打开文件。
+重新加载 Pager HZ 后，点击侧栏的书本按钮，或执行 **Pager HZ：打开电子书**，搜索 Vault 内的 `.epub` 文件。若安装了其他 EPUB 插件，使用这个入口可明确选择 Pager 阅读器；没有其他插件注册该扩展名时，也可以直接打开文件。
 
 - 横竖屏均为单栏、一屏一页。右侧箭头翻屏，正文不覆盖点击翻页层；也支持 `←` / `→` 和 `PageUp` / `PageDown`。
 - 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右和上下边距，并选择原字体、宋体类或黑体类字体。字体的具体外观取决于设备已安装字体。
@@ -124,9 +126,9 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 
 ### BRAT
 
-In BRAT, choose **Add Beta plugin** and enter only `Heptazero/obsidian-PDF-pager`. Do not paste a Markdown link, Chinese punctuation, or a release URL. Then enable **PDF Pager (hz)** in Obsidian's Community plugins settings.
+In BRAT, choose **Add Beta plugin** and enter only `Heptazero/obsidian-PDF-pager`. Do not paste a Markdown link, Chinese punctuation, or a release URL. Then enable **Pager HZ** in Obsidian's Community plugins settings.
 
-在 BRAT 中选择“添加测试版插件”，仓库地址只输入 `Heptazero/obsidian-PDF-pager`。不要附带中文逗号、Markdown 链接格式或 `/releases/tag/0.1.0`。安装后在 Obsidian 的社区插件设置中启用 **PDF Pager (hz)**。
+在 BRAT 中选择“添加测试版插件”，仓库地址只输入 `Heptazero/obsidian-PDF-pager`。不要附带中文逗号、Markdown 链接格式或 `/releases/tag/0.1.0`。安装后在 Obsidian 的社区插件设置中启用 **Pager HZ**。
 
 ### Manual installation / 手动安装
 
