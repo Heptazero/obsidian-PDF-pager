@@ -33,6 +33,28 @@ function memoryApp(adapter: MemoryAdapter, storage: Map<string, unknown>): App {
   } as unknown as App;
 }
 
+test("EPUB CFI progress and bookmarks merge across devices without mixing same-title files", async () => {
+  const adapter = new MemoryAdapter();
+  const storage = new Map<string, unknown>();
+  storage.set("pdf-pager-hz:device:test-vault", "device-aaaaaaaa");
+  const first = new StateStore(memoryApp(adapter, storage));
+  const start = { cfi: "epubcfi(/6/2!/4/2/1:0)", percentage: 0.1, chapter: "一" };
+  await first.recordEpubProgress("甲/书.epub", start);
+  await first.addEpubBookmark("甲/书.epub", start);
+  storage.set("pdf-pager-hz:device:test-vault", "device-bbbbbbbb");
+  const second = new StateStore(memoryApp(adapter, storage));
+  assert.deepEqual((await second.load("甲/书.epub")).progress?.epub, start);
+  const end = { ...start, cfi: "epubcfi(/6/2!/4/2/1:500)", percentage: 0.6 };
+  await second.recordEpubProgress("甲/书.epub", end);
+  await first.recordEpubProgress("乙/书.epub", start);
+  assert.deepEqual((await first.load("甲/书.epub")).progress?.epub, end);
+  assert.deepEqual((await first.load("乙/书.epub")).progress?.epub, start);
+  assert.deepEqual((await second.load("甲/书.epub")).bookmarks[0]?.epub, start);
+  await first.rename("甲/书.epub", "甲/重命名.epub");
+  assert.deepEqual((await second.load("甲/重命名.epub")).progress?.epub, end);
+  assert.ok(recordFileName("甲/书.epub", "device-aaaaaaaa").startsWith("书__"));
+});
+
 test("two devices keep independent files, merge bookmarks, and follow a PDF rename", async () => {
   const adapter = new MemoryAdapter();
   const storage = new Map<string, unknown>();

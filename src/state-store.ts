@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import {
-  mergeRecords, pathKey, type Bookmark, type DeviceRecord, type ReadingSession, type ReadingState,
+  mergeRecords, pathKey, type Bookmark, type DeviceRecord, type EpubLocation, type ReadingSession, type ReadingState,
 } from "./reading-state.ts";
 
 const PLUGIN_ID = "pdf-pager-hz";
@@ -8,7 +8,7 @@ const LEGACY_ROOT = "99_assets/plugin-data/pdf-pager";
 
 function safeFileStem(pdfPath: string): string {
   const fileName = pdfPath.normalize("NFC").split("/").pop() ?? "";
-  const withoutControls = [...fileName.replace(/\.pdf$/i, "").trim()]
+  const withoutControls = [...fileName.replace(/\.(pdf|epub)$/i, "").trim()]
     .map((character) => (character.codePointAt(0) ?? 0) < 32 ? "_" : character)
     .join("");
   const stem = withoutControls
@@ -223,6 +223,22 @@ export class StateStore {
 
   recordProgress(pdfPath: string, page: number, position = 0): Promise<ReadingState> {
     return this.edit(pdfPath, (record, now) => { record.progress = { page, position, updatedAt: now }; });
+  }
+
+  recordEpubProgress(path: string, location: EpubLocation): Promise<ReadingState> {
+    return this.edit(path, (record, now) => {
+      record.progress = { page: 1, updatedAt: now, epub: { ...location } };
+    });
+  }
+
+  addEpubBookmark(path: string, location: EpubLocation): Promise<ReadingState> {
+    return this.edit(path, (record, now) => {
+      const bookmark: Bookmark = {
+        id: uid(), page: 1, label: `${location.chapter} · ${(location.percentage * 100).toFixed(1)}%`,
+        epub: { ...location }, updatedAt: now,
+      };
+      record.bookmarks[bookmark.id] = bookmark;
+    });
   }
 
   addBookmark(pdfPath: string, page: number): Promise<ReadingState> {

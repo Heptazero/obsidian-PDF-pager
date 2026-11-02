@@ -1,10 +1,11 @@
 import { FuzzySuggestModal, ItemView, Modal, Notice, TFile, setIcon, type App, type WorkspaceLeaf } from "obsidian";
 import {
   aggregateReadingSessions, formatDuration, localDayKey, monthDays, normalizeReadingTypeName, normalizeReadingTypes,
-  pageRange, readingType, readingTypeValues, settlementStatus, shiftDay, UNCLASSIFIED_READING_TYPE, weekDays,
+  readingRange, readingType, readingTypeValues, settlementStatus, shiftDay, UNCLASSIFIED_READING_TYPE, weekDays,
   type BookDaySummary, type SettlementStatus,
 } from "./reading-log.ts";
 import type { StateStore } from "./state-store.ts";
+import { epubRange } from "./epub-state.ts";
 
 export const READING_LOG_VIEW = "pdf-pager-reading-log";
 
@@ -38,7 +39,7 @@ interface ResolvedSummary {
 
 function fileName(path: string): string {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name.replace(/\.pdf$/i, "");
+  return name.replace(/\.(pdf|epub)$/i, "");
 }
 
 function bookHue(path: string): number {
@@ -335,7 +336,7 @@ export class ReadingLogView extends ItemView {
   }
 
   getViewType(): string { return READING_LOG_VIEW; }
-  getDisplayText(): string { return "PDF 阅读日志"; }
+  getDisplayText(): string { return "阅读日志"; }
   getIcon(): string { return "bar-chart-3"; }
 
   async onOpen(): Promise<void> {
@@ -394,7 +395,7 @@ export class ReadingLogView extends ItemView {
     root.empty();
     const heading = root.createDiv("pdf-pager-log-heading");
     const title = heading.createDiv();
-    title.createEl("h2", { text: "PDF 阅读日志" });
+    title.createEl("h2", { text: "阅读日志" });
     title.createDiv({ cls: "pdf-pager-log-subtitle", text: "阅读时自动记录，写日记时手动结算。" });
     this.renderTypeTabs(root, types);
     const todayItems = visible.filter((item) => item.summary.day === todayKey);
@@ -488,7 +489,7 @@ export class ReadingLogView extends ItemView {
     title.addEventListener("click", () => void this.host.openPdf(summary.pdfPath));
     const metrics = heading.createDiv("pdf-pager-log-book-metrics");
     metrics.createSpan({ cls: "pdf-pager-log-book-duration", text: formatDuration(summary.durationMs) });
-    metrics.createSpan({ cls: "pdf-pager-log-book-pages", text: pageRange(summary).slice(1, -1).replace("-", "–") + " 页" });
+    metrics.createSpan({ cls: "pdf-pager-log-book-pages", text: readingRange(summary) });
 
     const typeButton = card.createEl("button", {
       cls: item.type === UNCLASSIFIED_READING_TYPE ? "pdf-pager-log-book-type is-unclassified" : "pdf-pager-log-book-type",
@@ -522,7 +523,8 @@ export class ReadingLogView extends ItemView {
       const row = detail.createDiv("pdf-pager-log-session-row");
       row.createSpan({ text: `${clock(session.startedAt)}–${clock(session.endedAt)}` });
       row.createSpan({ text: formatDuration(session.durationMs) });
-      row.createSpan({ text: `p${session.startPage}–${session.endPage}` });
+      row.createSpan({ text: summary.pdfPath.toLowerCase().endsWith(".epub")
+        ? epubRange(session.startLocation, session.endLocation) : `p${session.startPage}–${session.endPage}` });
     }
   }
 

@@ -17,6 +17,7 @@ import {
 } from "./settings";
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
+import { EPUB_VIEW, EpubReaderView, chooseEpub } from "./epub-view";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 const READING_TICK_MS = 15_000;
@@ -738,7 +739,20 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     await this.store.migrateReadableFileNames();
     this.addSettingTab(new PdfPagerSettingTab(this.app, this));
     this.registerView(READING_LOG_VIEW, (leaf) => new ReadingLogView(leaf, this));
-    this.addRibbonIcon("bar-chart-3", "PDF 阅读日志", () => void this.openReadingLog());
+    this.registerView(EPUB_VIEW, (leaf) => new EpubReaderView(leaf, this));
+    try { this.registerExtensions(["epub"], EPUB_VIEW); }
+    catch { /* Another reader owns EPUB; the explicit Pager command remains available. */ }
+    this.addCommand({ id: "open-epub", name: "打开电子书", callback: () => chooseEpub(this) });
+    this.addRibbonIcon("book-open", "打开电子书", () => chooseEpub(this));
+    for (const direction of [-1, 1] as const) {
+      this.addCommand({ id: direction === 1 ? "epub-next" : "epub-previous", name: direction === 1 ? "EPUB：下一屏" : "EPUB：上一屏",
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(EpubReaderView);
+          if (!checking) view?.turn(direction);
+          return !!view;
+        } });
+    }
+    this.addRibbonIcon("bar-chart-3", "阅读日志", () => void this.openReadingLog());
     this.app.workspace.onLayoutReady(() => this.scan());
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scan()));
     this.registerEvent(this.app.workspace.on("file-open", () => window.setTimeout(() => this.scan(), 0)));
@@ -748,11 +762,11 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.registerDomEvent(document, "visibilitychange", () => this.syncReadingFocus());
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       void this.updateNoteLinksForRename(oldPath, file.path, file instanceof TFolder);
-      if (!(file instanceof TFolder || (file instanceof TFile && file.extension.toLowerCase() === "pdf"))) return;
+      if (!(file instanceof TFolder || (file instanceof TFile && ["pdf", "epub"].includes(file.extension.toLowerCase())))) return;
       const newPath = file.path;
-      const migration = file instanceof TFolder
+      const migration = Promise.all(this.epubViews().map((view) => view.flushProgress())).then(() => file instanceof TFolder
         ? this.store.renamePrefix(oldPath, newPath)
-        : this.store.rename(oldPath, newPath);
+        : this.store.rename(oldPath, newPath));
       void migration.then(async () => {
         await Promise.all([...this.sessions.values()].map((session) => session.renamed(oldPath, file.path)));
         this.scan();
@@ -793,13 +807,13 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       if (!checking) session?.next();
       return !!session;
     } });
-    this.addCommand({ id: "open-reading-log", name: "打开 PDF 阅读日志", callback: () => void this.openReadingLog() });
+    this.addCommand({ id: "open-reading-log", name: "打开阅读日志", callback: () => void this.openReadingLog() });
     this.addCommand({ id: "open-linked-reading-note", name: "PDF：打开关联书籍日志", checkCallback: (checking) => {
       const session = this.activeSession();
       if (!checking) session?.openReadingNote();
       return !!session;
     } });
-    this.addCommand({ id: "settle-today", name: "结算今天的 PDF 阅读", callback: () => {
+    this.addCommand({ id: "settle-today", name: "结算今天的阅读", callback: () => {
       const day = localDayKey(Date.now(), this.data.dayEndMinutes);
       void this.settleReadingDay(day).then((result) => {
         if (result.unresolved.length) new Notice(`已结算 ${result.settled.length} 本；${result.unresolved.length} 本需要先关联书籍笔记`);
@@ -836,8 +850,9 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   syncFocusMode(): void {
     for (const document of this.focusDocuments) document.body.classList.remove("pdf-pager-focus-mode");
     this.focusDocuments.clear();
-    const active = this.activeSession();
+    const active = this.activeSession() ?? this.app.workspace.getActiveViewOfType(EpubReaderView);
     for (const session of this.sessions.values()) session.applyFocusMode(session === active && session.isFocusModeEnabled());
+    for (const view of this.epubViews()) view.applyFocusMode(view === active && view.isFocusModeEnabled());
     if (!active?.isFocusModeEnabled()) return;
     const document = active.focusDocument();
     document.body.classList.add("pdf-pager-focus-mode");
@@ -845,7 +860,19 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   }
 
   private async flushReading(): Promise<void> {
-    await Promise.all([...this.sessions.values()].map((session) => session.flushReading()));
+    await Promise.all([...this.sessions.values(), ...this.epubViews()].map((session) => session.flushReading()));
+  }
+
+  private epubViews(): EpubReaderView[] {
+    return this.app.workspace.getLeavesOfType(EPUB_VIEW).map((leaf) => leaf.view)
+      .filter((view): view is EpubReaderView => view instanceof EpubReaderView);
+  }
+
+  async openEpub(file: TFile): Promise<void> {
+    const existing = this.epubViews().find((view) => view.file?.path === file.path);
+    const leaf = existing?.leaf ?? this.app.workspace.getLeaf("tab");
+    if (!existing) await leaf.setViewState({ type: EPUB_VIEW, state: { file: file.path }, active: true });
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   getPdfPagerSettings(): PdfPagerSettings { return this.data; }
@@ -963,7 +990,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.refreshReadingLog();
   }
 
-  private async openReadingLog(): Promise<void> {
+  async openReadingLog(): Promise<void> {
     await this.flushReading();
     const existing = this.app.workspace.getLeavesOfType(READING_LOG_VIEW)[0];
     const leaf = existing ?? this.app.workspace.getLeaf("tab");
@@ -1032,6 +1059,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
 
   async openPdf(pdfPath: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (file instanceof TFile && file.extension.toLowerCase() === "epub") { await this.openEpub(file); return; }
     if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf") {
       new Notice("找不到这个 PDF，文件可能已移动");
       return;
@@ -1044,7 +1072,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   async openReadingNoteForPdf(pdfPath: string): Promise<void> {
     const note = await this.resolveReadingNote(pdfPath);
     if (!note) {
-      new Notice("没有找到关联书籍笔记；请先在 PDF 阅读日志中关联");
+      new Notice("没有找到关联书籍笔记；请先在阅读日志中关联");
       return;
     }
     await this.openReadingNote(note, localDayKey(Date.now(), this.data.dayEndMinutes), pdfPath);

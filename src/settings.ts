@@ -100,7 +100,7 @@ export class PdfPagerSettingTab extends PluginSettingTab {
       .setDesc("Vault 内的文件夹路径。修改后会把现有记录复制过去；两台设备需设置相同路径，并让同步软件包含该目录。");
     folderSetting.addText((text) => {
       text.setValue(settings.recordFolder).setPlaceholder("99_assets/plugin-data/reading-records");
-      text.inputEl.setAttr("aria-label", "PDF 阅读记录文件夹路径");
+      text.inputEl.setAttr("aria-label", "阅读记录文件夹路径");
       const apply = async (value: string) => {
         try {
           await this.controller.updateRecordFolder(value);
@@ -128,7 +128,7 @@ export class PdfPagerSettingTab extends PluginSettingTab {
           .setValue(String(settings.idleMinutes))
           .onChange(async (value) => {
             await this.controller.updateIdleMinutes(Number(value));
-            new Notice(`PDF 阅读计时会在无操作 ${value} 分钟后暂停`);
+            new Notice(`阅读计时会在无操作 ${value} 分钟后暂停`);
           });
       });
 

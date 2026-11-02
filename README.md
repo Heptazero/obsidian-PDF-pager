@@ -4,6 +4,8 @@
 
 It also remembers the page and in-page position after rotation or reopening, provides bookmarks and reading-time logs, and stores syncable reading records inside the vault. Per-device records are merged so that opening the same PDF on another device is less likely to overwrite newer progress.
 
+The built-in EPUB reader uses EPUB.js for single-screen pagination, adjustable margins and typography, text-based resume positions, bookmarks, and the same synced reading log. It does not require a separate EPUB reader plugin.
+
 > 中文简介：PDF Pager 是一个面向 Obsidian 手机横屏阅读的 PDF 单页翻页插件。它支持一屏一屏翻页、旋转后保持位置、双指缩放、跨设备续读、书签和阅读时长日志。
 
 ## Does PDF Pager solve this problem?
@@ -86,7 +88,7 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 
 插件自动记录聚焦 PDF 的阅读时段；切换标签页或应用进入后台时暂停。默认连续 5 分钟无操作后暂停，也可在设置中改为 10、15 或 30 分钟。
 
-左侧栏的柱状图按钮或命令“打开 PDF 阅读日志”可打开日志页。顶部标签按关联笔记的 `type` 属性原值筛选全部内容，不翻译或改名；没有 type 或未关联的记录归入“未分类”。顶部的加号可以从整个 Vault 所有 Markdown 笔记的 `type` 值中模糊搜索，也可以新增、重命名和删除类型；卡片上的类型标签同样搜索全库 type，并把选择结果写回关联笔记。删除类型只移除相关笔记的 type，不删除阅读记录。今天、昨天、更早、本周和本月均可折叠；更早日期可以逐日展开和结算。本周与本月按天显示阅读时长，以不同颜色区分书籍，并用虚线标出截至当天的日均时长。本月标题还显示本月阅读天数。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
+左侧栏的柱状图按钮或命令“打开阅读日志”可打开日志页。顶部标签按关联笔记的 `type` 属性原值筛选全部内容，不翻译或改名；没有 type 或未关联的记录归入“未分类”。顶部的加号可以从整个 Vault 所有 Markdown 笔记的 `type` 值中模糊搜索，也可以新增、重命名和删除类型；卡片上的类型标签同样搜索全库 type，并把选择结果写回关联笔记。删除类型只移除相关笔记的 type，不删除阅读记录。今天、昨天、更早、本周和本月均可折叠；更早日期可以逐日展开和结算。本周与本月按天显示阅读时长，以不同颜色区分书籍，并用虚线标出截至当天的日均时长。本月标题还显示本月阅读天数。可设置把间隔不超过 5–60 分钟的相邻时段合并显示，间隔不计入时长，原始记录不会删除。页码跳转只表示位置变化，不代表逐页读完中间所有页面。
 
 “结算今天”或历史日期里的结算按钮会把当天总时长和起止页写入关联书籍笔记的 `## log`，例如 `- 1008 [20-43] [1.3h]`。结算行带有隐藏标记；日志卡片据此显示“已结算”，之后继续阅读并使结算内容发生变化时显示“需更新”。再次结算会覆盖当天总数，并保留下面缩进的感想。
 
@@ -102,6 +104,21 @@ PDF Pager 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 
 - 移动端宽度面板会居中并隔离边缘拖动，避免误展开 Obsidian 侧边栏。
 - 移动端日志页提供可调底部留白，横屏和竖屏均可避开 Obsidian 底部工具栏。
 - PDF 顶部动作或命令“PDF：切换专注模式”会进入真正的 PDF Zen 模式：只保留 PDF 页面、PDF Pager 翻页控件和右上角退出按钮；隐藏 Obsidian 的返回/前进与文件标题栏、标签栏、左右侧栏、Ribbon、状态栏、移动端导航，以及原生 PDF 工具栏、搜索栏、缩略图侧栏和滚动条。该模式只在对应 PDF 标签页激活时生效；切到其他页面会恢复界面，返回 PDF 后继续。桌面端也可按 `Esc` 退出。
+
+## EPUB 阅读（本地开发版）
+
+重新加载 PDF Pager 后，点击侧栏的书本按钮，或执行 **PDF Pager：打开电子书**，搜索 Vault 内的 `.epub` 文件。若安装了其他 EPUB 插件，使用这个入口可明确选择 Pager 阅读器；没有其他插件注册该扩展名时，也可以直接打开文件。
+
+- 横竖屏均为单栏、一屏一页。右侧箭头翻屏，正文不覆盖点击翻页层；也支持 `←` / `→` 和 `PageUp` / `PageDown`。
+- 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右和上下边距，并选择原字体、宋体类或黑体类字体。字体的具体外观取决于设备已安装字体。
+- 同一面板提供可搜索目录、添加书签、书签跳转、关联书籍日志、阅读日志和专注模式。阅读区域为右侧控件预留空间，避免遮字。
+- 使用 EPUB CFI（定位到书内文字的标识）保存位置。旋转、修改排版和重新打开会回到该文字所在的一屏；屏幕起点可能因重新分页稍有不同。打开和重新排版不会更新同步进度，主动翻屏与章节跳转才会保存。
+- 与 PDF 共用设置中的阅读记录目录、按设备记录、计时规则、分类、图表和手动结算。EPUB 在日志中显示百分比范围，例如 `[EPUB 10.0%–20.0%]`，不把动态屏数当固定页码。关联笔记可引用 EPUB 文件，或在日志卡片中手动选择。
+- 排版偏好保存在当前设备；阅读进度、书签和计时随记录目录同步。原 EPUB 文件不改动。
+
+第一版以普通、无 DRM 的可重排 EPUB 为验收范围。原生文字选择仍可使用；EPUB 彩色高亮及词典插件联动尚未接入，不能据此视为已经实现手机与电脑的全部标注能力。
+
+开发验证使用合成电子书和手机尺寸浏览器，不代替 Android/iOS Obsidian 真机验收。首次打开会生成与屏幕尺寸无关的文字进度索引，大书需要更多时间。
 
 ## Installation / 安装
 
@@ -126,8 +143,11 @@ After updating Obsidian, check orientation changes, pinch zoom, centered paging,
 ```bash
 npm install
 npm test
+npm run test:epub-browser
 npm run build
 ```
+
+浏览器测试默认使用 macOS 已安装的 Google Chrome；其他环境可通过 `PAGER_CHROME` 指定 Chrome/Chromium 可执行文件。测试只使用合成电子书，不读取真实 Vault 数据。
 
 ## License
 

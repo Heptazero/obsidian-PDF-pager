@@ -1,8 +1,15 @@
+export interface EpubLocation {
+  cfi: string;
+  percentage: number;
+  chapter: string;
+}
+
 export interface Progress {
   page: number;
   /** Relative vertical reading location within a PDF page (0–1). */
   position?: number;
   updatedAt: number;
+  epub?: EpubLocation;
 }
 
 export interface Bookmark {
@@ -11,6 +18,7 @@ export interface Bookmark {
   label: string;
   updatedAt: number;
   deleted?: boolean;
+  epub?: EpubLocation;
 }
 
 export interface ReadingSession {
@@ -25,6 +33,8 @@ export interface ReadingSession {
   minPage: number;
   maxPage: number;
   updatedAt: number;
+  startLocation?: EpubLocation;
+  endLocation?: EpubLocation;
 }
 
 export interface DeviceRecord {

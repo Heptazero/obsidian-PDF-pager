@@ -1,5 +1,6 @@
 import { pathKey, type ReadingSession } from "./reading-state.ts";
 import type { StoredReadingSession } from "./state-store.ts";
+import { epubRange } from "./epub-state.ts";
 
 export interface BookDaySummary {
   day: string;
@@ -87,7 +88,10 @@ export function mergeNearbySessions(sessions: StoredReadingSession[], gapMinutes
     previous.deviceId = previous.deviceId === session.deviceId ? previous.deviceId : "merged";
     previous.endedAt = Math.max(previous.endedAt, session.endedAt);
     previous.durationMs += session.durationMs;
-    if (nextEndsLater) previous.endPage = session.endPage;
+    if (nextEndsLater) {
+      previous.endPage = session.endPage;
+      previous.endLocation = session.endLocation;
+    }
     previous.minPage = Math.min(previous.minPage, session.minPage);
     previous.maxPage = Math.max(previous.maxPage, session.maxPage);
     previous.updatedAt = Math.max(previous.updatedAt, session.updatedAt);
@@ -151,7 +155,14 @@ export function settlementBlockId(day: string, pdfPath: string): string {
 
 export function settlementLine(summary: BookDaySummary): string {
   const monthDay = summary.day.slice(5).replace("-", "");
-  return `- ${monthDay} ${pageRange(summary)} [${formatHourToken(summary.durationMs)}] ${settlementMarker(summary.day, summary.pdfPath)} ^${settlementBlockId(summary.day, summary.pdfPath)}`;
+  const location = summary.pdfPath.toLowerCase().endsWith(".epub")
+    ? `[${readingRange(summary)}]` : pageRange(summary);
+  return `- ${monthDay} ${location} [${formatHourToken(summary.durationMs)}] ${settlementMarker(summary.day, summary.pdfPath)} ^${settlementBlockId(summary.day, summary.pdfPath)}`;
+}
+
+export function readingRange(summary: BookDaySummary): string {
+  if (!summary.pdfPath.toLowerCase().endsWith(".epub")) return pageRange(summary).slice(1, -1).replace("-", "–") + " 页";
+  return epubRange(summary.sessions[0]?.startLocation, summary.sessions[summary.sessions.length - 1]?.endLocation);
 }
 
 export type SettlementStatus = "unsettled" | "outdated" | "settled";
@@ -198,6 +209,7 @@ export function upsertDailySettlement(content: string, summary: BookDaySummary):
       .replace(dayPattern, "")
       .replace(/\[\s*\+?\s*(?:\d+(?:\.\d+)?\s*-\s*)?\d+(?:\.\d+)?\s*h?\s*\]/gi, "")
       .replace(/<!--\s*(?:pdf-pager|btl):[^>]+-->/gi, "")
+      .replace(/\[EPUB[^\]]*\]/g, "")
       .trim();
     const adopted = tail ? `${line} ${tail}` : line;
     const changed = lines[sameDay] !== adopted;

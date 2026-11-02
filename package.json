@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:epub-browser": "node tests/epub-browser.mjs",
     "lint": "eslint src",
     "build": "npm run typecheck && node esbuild.config.mjs"
   },
@@ -15,6 +16,13 @@
     "eslint": "^10.0.0",
     "eslint-plugin-obsidianmd": "latest",
     "obsidian": "latest",
+    "playwright": "1.56.1",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "epubjs": "0.3.93"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.9.12"
   }
 }

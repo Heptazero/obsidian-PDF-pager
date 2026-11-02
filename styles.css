@@ -1,3 +1,70 @@
+.epub-pager {
+  position: relative;
+  overflow: hidden;
+  padding: 0 !important;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  --epub-margin-x: 16px;
+  --epub-margin-y: 12px;
+}
+
+.epub-pager-area {
+  position: absolute;
+  inset: max(var(--epub-margin-y), env(safe-area-inset-top)) max(42px, var(--epub-margin-x), env(safe-area-inset-right)) max(var(--epub-margin-y), env(safe-area-inset-bottom)) max(var(--epub-margin-x), env(safe-area-inset-left));
+  overflow: hidden;
+}
+
+.epub-pager-controls {
+  position: absolute;
+  inset-inline-end: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--background-primary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  opacity: 0.85;
+}
+
+.epub-pager-controls button {
+  min-width: 32px;
+  min-height: 36px;
+  padding: 2px 4px;
+  font-size: 10px;
+}
+
+.epub-pager-panel {
+  box-sizing: border-box;
+  position: absolute;
+  right: 46px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  width: min(360px, calc(100% - 58px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 30;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+}
+
+.epub-pager-panel[hidden] { display: none; }
+.epub-pager-actions, .epub-pager-fonts { display: flex; gap: 4px; flex-wrap: wrap; }
+.epub-pager-actions button { min-width: 32px; min-height: 36px; }
+.epub-pager-panel-close { margin-inline-start: auto; }
+.epub-pager-option { display: grid; grid-template-columns: 70px 1fr 36px; gap: 8px; align-items: center; margin-block: 10px; font-size: var(--font-ui-small); }
+.epub-pager-option input { min-width: 0; width: 100%; }
+.epub-pager-option output { text-align: end; font-variant-numeric: tabular-nums; }
+.epub-pager-fonts button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
+.epub-pager-message { padding: 24px; color: var(--text-muted); }
+
 .pdf-pager-host {
   position: relative;
 }
