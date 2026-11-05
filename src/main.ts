@@ -18,6 +18,7 @@ import {
 import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
 import { EPUB_VIEW, EpubReaderView, chooseEpub } from "./epub-view";
+import { ensureEpubRegistration } from "./epub-registration";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 const READING_TICK_MS = 15_000;
@@ -742,6 +743,14 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     this.registerView(EPUB_VIEW, (leaf) => new EpubReaderView(leaf, this));
     try { this.registerExtensions(["epub"], EPUB_VIEW); }
     catch { /* Another reader owns EPUB; the explicit Pager command remains available. */ }
+    this.addCommand({ id: "repair-epub-registration", name: "修复电子书文件识别", callback: () => {
+      try {
+        const status = ensureEpubRegistration(this.app, EPUB_VIEW, () => this.registerExtensions(["epub"], EPUB_VIEW));
+        if (status === "unavailable") new Notice("当前版本无法检查文件识别，请重新加载本插件");
+        else if (status === "other-reader") new Notice("电子书当前由其他阅读器识别，可用“打开电子书”选择本阅读器");
+        else new Notice("电子书文件识别已就绪，可在文件列表中打开");
+      } catch (error) { new Notice(`EPUB 文件识别恢复失败：${String(error)}`); }
+    } });
     this.addCommand({ id: "open-epub", name: "打开电子书", callback: () => chooseEpub(this) });
     this.addRibbonIcon("book-open", "打开电子书", () => chooseEpub(this));
     for (const direction of [-1, 1] as const) {
@@ -828,6 +837,10 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   }
 
   private scan(): void {
+    // A reader disabled after our onload may remove its old extension registration.
+    // Repair only a missing handler; an active reader keeps ownership.
+    try { ensureEpubRegistration(this.app, EPUB_VIEW, () => this.registerExtensions(["epub"], EPUB_VIEW)); }
+    catch { /* Keep PDF sessions available; the repair command reports registration failures. */ }
     const views = new Set(this.app.workspace.getLeavesOfType("pdf").map((leaf) => leaf.view as FileView));
     for (const view of views) {
       const existing = this.sessions.get(view);
