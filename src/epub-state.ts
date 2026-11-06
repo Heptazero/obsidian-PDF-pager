@@ -7,10 +7,13 @@ export interface EpubPreferences {
   marginX: number;
   marginY: number;
   font: "original" | "serif" | "sans-serif";
+  spread: "auto" | "single" | "double";
+  columnGap: number;
 }
 
 export const DEFAULT_EPUB_PREFERENCES: EpubPreferences = {
-  fontSize: 20, lineHeight: 1.7, paragraphGap: 0.6, marginX: 16, marginY: 12, font: "original",
+  fontSize: 20, lineHeight: 1.65, paragraphGap: 0.4, marginX: 28, marginY: 24, font: "serif",
+  spread: "auto", columnGap: 48,
 };
 
 export function normalizeEpubPreferences(value: unknown): EpubPreferences {
@@ -23,8 +26,19 @@ export function normalizeEpubPreferences(value: unknown): EpubPreferences {
   return {
     fontSize: number("fontSize", 12, 40), lineHeight: number("lineHeight", 1.1, 2.5),
     paragraphGap: number("paragraphGap", 0, 2), marginX: number("marginX", 0, 64), marginY: number("marginY", 0, 64),
-    font: raw.font === "serif" || raw.font === "sans-serif" ? raw.font : "original",
+    font: raw.font === "original" || raw.font === "sans-serif" ? raw.font : "serif",
+    spread: raw.spread === "single" || raw.spread === "double" ? raw.spread : "auto",
+    columnGap: number("columnGap", 16, 96),
   };
+}
+
+export function epubPageLayout(width: number, preferences: EpubPreferences): { columns: 1 | 2; gap: number; maxWidth: number } {
+  const available = Math.max(1, width - 2 * Math.max(42, preferences.marginX));
+  const minimum = Math.max(480, preferences.fontSize * 20 + preferences.columnGap * 2);
+  const double = preferences.spread === "double" ? available >= minimum
+    : preferences.spread === "auto" && available >= Math.max(900, minimum);
+  return { columns: double ? 2 : 1, gap: double ? preferences.columnGap : 0,
+    maxWidth: double ? 1440 : Math.min(900, preferences.fontSize * 36) };
 }
 
 export function validEpubLocation(value: unknown): value is EpubLocation {

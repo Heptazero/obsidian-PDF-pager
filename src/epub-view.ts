@@ -1,7 +1,7 @@
 import { Component, FileView, FuzzySuggestModal, Notice, setIcon, type TFile, type WorkspaceLeaf } from "obsidian";
 import { Book, type Contents, type Location, type NavItem, type Rendition } from "epubjs";
 import type PdfPagerPlugin from "./main";
-import { normalizeEpubPreferences, validEpubLocation, type EpubPreferences } from "./epub-state";
+import { epubPageLayout, normalizeEpubPreferences, validEpubLocation, type EpubPreferences } from "./epub-state";
 import type { Bookmark, EpubLocation } from "./reading-state";
 import { ReadingTracker } from "./reading-tracker";
 
@@ -133,11 +133,10 @@ export class EpubReaderView extends FileView {
       message.remove();
       const options = {
         width: Math.max(1, this.area.clientWidth), height: Math.max(1, this.area.clientHeight),
-        flow: "paginated", spread: "none", allowScriptedContent: false,
-        resizeOnOrientationChange: false, gap: 0,
+        flow: "paginated", spread: this.pageLayout().columns === 2 ? "auto" : "none", minSpreadWidth: 0,
+        allowScriptedContent: false, resizeOnOrientationChange: false, gap: this.pageLayout().gap,
       };
       const rendition = book.renderTo(this.area, options);
-      // Zero column gap; outer insets are the only adjustable page margins.
       this.rendition = rendition;
       rendition.hooks.content.register((contents: Contents) => {
         this.styleContents(contents);
@@ -261,20 +260,28 @@ export class EpubReaderView extends FileView {
   private applyMargins(): void {
     this.contentEl.setCssProps({
       "--epub-margin-x": `${this.preferences.marginX}px`, "--epub-margin-y": `${this.preferences.marginY}px`,
+      "--epub-page-max-width": `${this.pageLayout().maxWidth}px`,
     });
   }
 
+  private pageLayout() { return epubPageLayout(this.contentEl.clientWidth, this.preferences); }
+
   private styleContents(contents: Contents): void {
     const style = getComputedStyle(this.contentEl);
-    contents.css("color", style.color, true);
+    contents.css("color", this.containerEl.ownerDocument.body.classList.contains("theme-dark") ? "#dedbd4" : "#25221d", true);
     contents.css("background-color", style.backgroundColor, true);
     contents.css("font-size", `${this.preferences.fontSize}px`, true);
     contents.css("line-height", String(this.preferences.lineHeight), true);
-    if (this.preferences.font !== "original") contents.css("font-family", this.preferences.font, true);
+    if (this.preferences.font !== "original") contents.css("font-family", this.preferences.font === "serif"
+      ? '"Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif'
+      : '"PingFang SC", "Microsoft YaHei", sans-serif', true);
     else contents.css("font-family", "", true);
     void contents.addStylesheetRules({
-      "html, body": { margin: "0 !important", padding: "0 !important", "max-width": "none !important" },
-      "p": { "font-size": "inherit !important", "line-height": "inherit !important", "margin-block": `${this.preferences.paragraphGap}em !important` },
+      "html, body": { margin: "0 !important", "padding-block": "0 !important", "max-width": "none !important" },
+      "body": { "padding-inline": `${this.pageLayout().gap / 2}px !important` },
+      "p, li, blockquote": { color: "inherit !important", "font-size": "inherit !important", "line-height": "inherit !important",
+        "text-align": "justify !important", "overflow-wrap": "break-word", hyphens: "auto", orphans: "2", widows: "2" },
+      "p": { "margin-block": `${this.preferences.paragraphGap}em !important` },
       "img, svg, video": { "max-width": "100% !important", "object-fit": "contain" },
     }, "pager-layout");
   }
@@ -282,6 +289,7 @@ export class EpubReaderView extends FileView {
   private scheduleLayout(): void {
     if (!this.ready || !this.rendition) return;
     this.reformatting = true;
+    this.applyMargins();
     if (this.layoutTimer !== null) window.clearTimeout(this.layoutTimer);
     this.layoutTimer = window.setTimeout(() => {
       this.layoutTimer = null;
@@ -294,6 +302,11 @@ export class EpubReaderView extends FileView {
     if (!rendition || this.area.clientWidth < 1 || this.area.clientHeight < 1) { this.reformatting = false; return; }
     const target = this.anchoredCfi;
     try {
+      const layout = this.pageLayout();
+      // The manager copies options at construction; update its gap before recalculating.
+      const managed = rendition as Rendition & { manager?: { settings: { gap?: number } } };
+      if (managed.manager) managed.manager.settings.gap = layout.gap;
+      rendition.spread(layout.columns === 2 ? "auto" : "none", 0);
       // epub.js's public declarations omit the third resize argument supported by the engine.
       (rendition as Rendition & { resize(width: number, height: number, cfi?: string): void })
         .resize(this.area.clientWidth, this.area.clientHeight, target ?? undefined);
@@ -325,9 +338,15 @@ export class EpubReaderView extends FileView {
     focus.setAttribute("aria-pressed", String(this.focus));
     const close = icon(actions, "x", "关闭阅读设置", () => this.togglePanel());
     close.addClass("epub-pager-panel-close");
-    const options: Array<[keyof Omit<EpubPreferences, "font">, string, number, number, number]> = [
+    const spreads = this.panel.createDiv({ cls: "epub-pager-fonts", attr: { role: "group", "aria-label": "页面栏数" } });
+    for (const [value, label] of [["auto", "自动"], ["single", "单栏"], ["double", "双栏"]] as const) {
+      const choice = spreads.createEl("button", { text: label, attr: { "aria-label": label, "aria-pressed": String(this.preferences.spread === value) } });
+      choice.addEventListener("click", () => { this.preferences.spread = value; this.savePreferences(); this.renderPanel(); });
+    }
+    const options: Array<[keyof Omit<EpubPreferences, "font" | "spread">, string, number, number, number]> = [
       ["fontSize", "字号", 12, 40, 1], ["lineHeight", "行距", 1.1, 2.5, 0.1],
       ["paragraphGap", "段间距", 0, 2, 0.1], ["marginX", "左右边距", 0, 64, 2], ["marginY", "上下边距", 0, 64, 2],
+      ["columnGap", "双栏中缝", 16, 96, 2],
     ];
     for (const [key, label, min, max, step] of options) {
       const row = this.panel.createEl("label", { cls: "epub-pager-option" });

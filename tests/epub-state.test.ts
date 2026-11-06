@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeEpubPreferences, validEpubLocation } from "../src/epub-state.ts";
+import { epubPageLayout, normalizeEpubPreferences, validEpubLocation } from "../src/epub-state.ts";
 import { aggregateReadingSessions, settlementLine, upsertDailySettlement } from "../src/reading-log.ts";
 import { ReadingTracker } from "../src/reading-tracker.ts";
 import type { ReadingSession } from "../src/reading-state.ts";
@@ -10,8 +10,19 @@ test("EPUB preferences reject corrupt numbers and clamp mobile layout limits", (
   assert.equal(preferences.fontSize, 20);
   assert.equal(preferences.marginX, 0);
   assert.equal(preferences.marginY, 64);
-  assert.equal(preferences.font, "original");
+  assert.equal(preferences.font, "serif");
   assert.equal(validEpubLocation({ cfi: "epubcfi(/6/2!/4/2/1:0)", percentage: NaN, chapter: "A" }), false);
+});
+
+test("book layout adapts to width while preserving explicit layout and existing font choices", () => {
+  const preferences = normalizeEpubPreferences({ font: "original", fontSize: 20 });
+  assert.equal(preferences.font, "original");
+  assert.equal(epubPageLayout(1440, preferences).columns, 2);
+  assert.equal(epubPageLayout(844, preferences).columns, 1);
+  assert.equal(epubPageLayout(844, { ...preferences, spread: "double" }).columns, 2);
+  assert.equal(epubPageLayout(390, { ...preferences, spread: "double" }).columns, 1);
+  assert.equal(epubPageLayout(1440, { ...preferences, spread: "single" }).maxWidth, 720);
+  assert.equal(epubPageLayout(1440, { ...preferences, columnGap: 80 }).gap, 80);
 });
 
 test("EPUB tracker stops at idle, resumes as a new session, and pauses in the background", async () => {
