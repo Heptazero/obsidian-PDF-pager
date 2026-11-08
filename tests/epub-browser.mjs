@@ -6,6 +6,7 @@ import http from "node:http";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import JSZip from "jszip";
+import { epubBuild } from "../epub-build.mjs";
 
 const directory = await mkdtemp(path.join(tmpdir(), "pager-epub-browser-"));
 const zip = new JSZip();
@@ -13,9 +14,9 @@ zip.file("mimetype", "application/epub+zip");
 zip.file("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
 zip.file("book.opf", '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">test</dc:identifier><dc:title>测试</dc:title><dc:language>zh</dc:language><meta property="dcterms:modified">2026-11-02T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>');
 zip.file("nav.xhtml", '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="a.xhtml">第一章</a><ol><li><a href="a.xhtml#p30">第一节</a></li></ol></li><li><a href="b.xhtml">第二章</a></li></ol></nav></body></html>');
-for (const chapter of ["a", "b"]) zip.file(`${chapter}.xhtml`, `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>${chapter}</title><style>body { margin: 80px; } p { font-size: 14px; font-family: monospace !important; }</style></head><body><h1>${chapter}</h1>${Array.from({ length: 100 }, (_, i) => `<p id="p${i}"><span style="font-family: monospace">段落 ${chapter}-${i}：这是一段测试文字，用来验证横屏分页、字号、边距、稳定的位置和章节跳转。${"翻到下一屏仍然可以继续阅读。".repeat(5)}</span></p>`).join("")}</body></html>`);
-const fixture = await zip.generateAsync({ type: "nodebuffer" });
-await build({ entryPoints: ["tests/browser/epub-harness.ts"], bundle: true, outfile: path.join(directory, "test.js"), platform: "browser", format: "iife", alias: { obsidian: path.resolve("tests/browser/obsidian-stub.ts") } });
+for (const chapter of ["a", "b"]) zip.file(`${chapter}.xhtml`, `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>${chapter}</title><script>document.body.dataset.executed = "yes";</script><style>body { margin: 80px; } p { font-size: 14px; font-family: monospace !important; }</style></head><body><h1>${chapter}</h1>${Array.from({ length: 100 }, (_, i) => `<p id="p${i}"><span style="font-family: monospace">段落 ${chapter}-${i}：这是一段测试文字，用来验证横屏分页、字号、边距、稳定的位置和章节跳转。${"翻到下一屏仍然可以继续阅读。".repeat(5)}</span></p>`).join("")}</body></html>`);
+const fixture = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+await build({ plugins: [epubBuild], entryPoints: ["tests/browser/epub-harness.ts"], bundle: true, outfile: path.join(directory, "test.js"), platform: "browser", format: "iife", alias: { obsidian: path.resolve("tests/browser/obsidian-stub.ts") } });
 const script = await readFile(path.join(directory, "test.js"));
 const css = await readFile("styles.css");
 const server = http.createServer((request, response) => {
@@ -41,6 +42,9 @@ try {
   await page.waitForFunction(() => window.harness.view.ready && !window.harness.view.reformatting, undefined, { timeout: 20000 });
   assert.equal(await page.evaluate(() => window.harness.view.toc.length), 3);
   assert.equal(await page.locator("iframe").count(), 1);
+  const frame = page.locator("iframe");
+  assert.equal(await frame.getAttribute("sandbox"), "allow-same-origin");
+  assert.equal(await frame.evaluate((element) => element.contentDocument.body.dataset.executed), undefined);
   for (let attempt = 0; attempt < 4; attempt++) {
     const before = await page.evaluate(() => {
       const view = window.harness.view;

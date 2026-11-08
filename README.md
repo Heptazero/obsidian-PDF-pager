@@ -153,6 +153,15 @@ npm run build
 
 浏览器测试默认使用 macOS 已安装的 Google Chrome；其他环境可通过 `PAGER_CHROME` 指定 Chrome/Chromium 可执行文件。测试只使用合成电子书，不读取真实 Vault 数据。
 
+### Release provenance
+
+Pushing a version tag that matches the manifest runs the GitHub Actions release workflow. The workflow builds, tests, and attests the files before uploading them to the release. To check the provenance of an asset from a release produced by this workflow, run:
+
+```bash
+gh attestation verify main.js --repo Heptazero/obsidian-PDF-pager
+gh attestation verify styles.css --repo Heptazero/obsidian-PDF-pager
+```
+
 ## License
 
 [MIT](LICENSE)

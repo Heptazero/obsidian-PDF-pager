@@ -1,0 +1,54 @@
+name: Build and attest release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Check release version
+        run: |
+          node --input-type=commonjs -e '
+            const version = process.env.GITHUB_REF_NAME;
+            const manifest = require("./manifest.json");
+            if (manifest.version !== version || require("./package.json").version !== version ||
+                require("./versions.json")[version] !== manifest.minAppVersion) {
+              throw new Error("Release tag must match the plugin version files");
+            }
+          '
+      - name: Build and test
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+      - name: Attest the release files
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            main.js
+            styles.css
+            manifest.json
+      - name: Publish the attested files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" main.js styles.css manifest.json \
+            --verify-tag --title "Pager HZ $GITHUB_REF_NAME" --generate-notes

@@ -66,6 +66,7 @@ Object.assign((window as unknown as { harness: object }).harness, {
   mountLog() {
     const opened: string[] = [];
     const log = new ReadingLogView({ app } as never, { app, openPdf: (path: string) => opened.push(path) } as never);
+    log.contentEl.addClass("pdf-pager-log-view");
     const grid = log.contentEl.createDiv("pdf-pager-log-grid");
     const render = log as unknown as { renderBook(parent: HTMLElement, item: unknown): void };
     for (const name of ["从日志打开一本标题特别长的电子书以确认手机上可以完整阅读书名.epub", "另一份书籍.pdf"]) {

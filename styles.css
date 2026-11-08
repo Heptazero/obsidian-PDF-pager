@@ -1,7 +1,7 @@
-.epub-pager {
+.view-content.epub-pager {
   position: relative;
   overflow: hidden;
-  padding: 0 !important;
+  padding: 0;
   background: var(--background-primary);
   color: var(--text-normal);
   --epub-margin-x: 28px;
@@ -113,17 +113,19 @@
   position: relative;
 }
 
-body.pdf-pager-focus-mode .workspace-ribbon,
-body.pdf-pager-focus-mode .workspace-split.mod-left-split,
-body.pdf-pager-focus-mode .workspace-split.mod-right-split,
-body.pdf-pager-focus-mode .workspace-drawer,
-body.pdf-pager-focus-mode .workspace-tab-header-container,
-body.pdf-pager-focus-mode .titlebar,
-body.pdf-pager-focus-mode .status-bar,
-body.pdf-pager-focus-mode .mobile-navbar,
-body.pdf-pager-focus-mode .mobile-toolbar,
-body.pdf-pager-focus-mode .mobile-tab-switcher {
-  display: none !important;
+body.pdf-pager-focus-mode :is(
+  .workspace-ribbon,
+  .workspace-split.mod-left-split,
+  .workspace-split.mod-right-split,
+  .workspace-drawer,
+  .workspace-tab-header-container,
+  .titlebar,
+  .status-bar,
+  .mobile-navbar,
+  .mobile-toolbar,
+  .mobile-tab-switcher
+) {
+  display: none;
 }
 
 body.pdf-pager-focus-mode .pdf-pager-focus-active .view-header,
@@ -131,7 +133,7 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-toolbar,
 body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-findbar,
 body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-sidebar-container,
 body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-sidebar-resizer {
-  display: none !important;
+  display: none;
 }
 
 body.pdf-pager-focus-mode .workspace-leaf-content,
@@ -140,11 +142,11 @@ body.pdf-pager-focus-mode .workspace-tabs {
 }
 
 body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-content-container.sidebarOpen .pdf-viewer-container {
-  inset-inline-start: 0 !important;
+  inset-inline-start: 0;
 }
 
 body.pdf-pager-focus-mode .pdf-pager-focus-active .findbarOpen .pdf-viewer-container {
-  margin-top: 0 !important;
+  margin-top: 0;
 }
 
 body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container {
@@ -549,16 +551,16 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit
   background: hsl(var(--pdf-pager-book-hue) 68% 55%);
 }
 
-.pdf-pager-log-book-title {
+.pdf-pager-log-view button.pdf-pager-log-book-title {
   appearance: none;
   overflow: hidden;
   flex: 1;
   min-width: 0;
   min-height: 0;
   padding: 0;
-  border: 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
   color: var(--text-normal);
   font-weight: var(--font-semibold);
   text-align: left;
@@ -567,7 +569,7 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit
   white-space: normal;
 }
 
-.pdf-pager-log-book-title:hover {
+.pdf-pager-log-view button.pdf-pager-log-book-title:hover {
   color: var(--link-color);
   text-decoration: underline;
 }
@@ -624,16 +626,16 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit
   flex: 0 0 auto;
 }
 
-.pdf-pager-log-note {
+.pdf-pager-log-view button.pdf-pager-log-note {
   appearance: none;
   overflow: hidden;
   flex: 0 1 auto;
   min-width: 0;
   min-height: 0;
   padding: 0;
-  border: 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
   color: var(--link-color);
   font-size: inherit;
   text-align: left;
@@ -641,7 +643,7 @@ body.pdf-pager-focus-mode .pdf-pager-focus-active .pdf-viewer-container::-webkit
   white-space: nowrap;
 }
 
-.pdf-pager-log-note.is-unlinked {
+.pdf-pager-log-view button.pdf-pager-log-note.is-unlinked {
   color: var(--text-warning);
 }
 
