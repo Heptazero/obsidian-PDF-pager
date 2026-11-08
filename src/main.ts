@@ -537,6 +537,8 @@ class PagerSession implements PagerActions {
       .catch((error) => new Notice(`打开书籍日志失败：${String(error)}`));
   }
 
+  openReadingLog(): void { void this.plugin.openReadingLog(); }
+
   private pageMetrics(page = this.page): { container: HTMLElement; pageEl: HTMLElement; pageTop: number; pageHeight: number; viewportHeight: number } | null {
     const pdf = this.native?.pdfViewer;
     const container = pdf?.container;
@@ -882,10 +884,16 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
   }
 
   async openEpub(file: TFile): Promise<void> {
-    const existing = this.epubViews().find((view) => view.file?.path === file.path);
-    const leaf = existing?.leaf ?? this.app.workspace.getLeaf("tab");
-    if (!existing) await leaf.setViewState({ type: EPUB_VIEW, state: { file: file.path }, active: true });
-    await this.app.workspace.revealLeaf(leaf);
+    const workspace = this.app.workspace;
+    const existing = workspace.getLeavesOfType(EPUB_VIEW).find((leaf) => leaf.getViewState().state?.file === file.path);
+    const leaf = existing ?? workspace.getLeaf("tab");
+    try {
+      await workspace.revealLeaf(leaf);
+      workspace.setActiveLeaf(leaf, { focus: true });
+      if (!existing) await leaf.setViewState({ type: EPUB_VIEW, state: { file: file.path }, active: true });
+    } catch (error) {
+      new Notice(`无法打开 EPUB：${String(error)}`);
+    }
   }
 
   getPdfPagerSettings(): PdfPagerSettings { return this.data; }
@@ -1074,12 +1082,19 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     const file = this.app.vault.getAbstractFileByPath(pdfPath);
     if (file instanceof TFile && file.extension.toLowerCase() === "epub") { await this.openEpub(file); return; }
     if (!(file instanceof TFile) || file.extension.toLowerCase() !== "pdf") {
-      new Notice("找不到这个 PDF，文件可能已移动");
+      new Notice("找不到这本书，文件可能已移动");
       return;
     }
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    await this.app.workspace.revealLeaf(leaf);
+    const workspace = this.app.workspace;
+    const existing = workspace.getLeavesOfType("pdf").find((leaf) => leaf.getViewState().state?.file === file.path);
+    const leaf = existing ?? workspace.getLeaf("tab");
+    try {
+      await workspace.revealLeaf(leaf);
+      workspace.setActiveLeaf(leaf, { focus: true });
+      if (!existing) await leaf.openFile(file, { active: true });
+    } catch (error) {
+      new Notice(`无法打开 PDF：${String(error)}`);
+    }
   }
 
   async openReadingNoteForPdf(pdfPath: string): Promise<void> {

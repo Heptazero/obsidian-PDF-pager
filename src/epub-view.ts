@@ -1,7 +1,8 @@
-import { Component, FileView, FuzzySuggestModal, Notice, Platform, setIcon, type TFile, type WorkspaceLeaf } from "obsidian";
+import { Component, FileView, FuzzySuggestModal, Modal, Notice, Platform, setIcon, type TFile, type WorkspaceLeaf } from "obsidian";
 import { Book, type Contents, type Location, type NavItem, type Rendition } from "epubjs";
+import { bindReaderDrag, createPanelHeader, setFocusButton, watchReaderToolbar } from "./reader-controls";
 import type PdfPagerPlugin from "./main";
-import { epubPageLayout, normalizeEpubPreferences, validEpubLocation, type EpubPreferences } from "./epub-state";
+import { DEFAULT_EPUB_PREFERENCES, epubPageLayout, normalizeEpubPreferences, validEpubLocation, type EpubPreferences } from "./epub-state";
 import type { Bookmark, EpubLocation } from "./reading-state";
 import { ReadingTracker } from "./reading-tracker";
 
@@ -30,8 +31,13 @@ function icon(parent: HTMLElement, name: string, title: string, action: () => vo
   return button;
 }
 
-function flattenToc(items: NavItem[]): NavItem[] {
-  return items.flatMap((item) => [item, ...flattenToc(item.subitems ?? [])]);
+interface Chapter {
+  item: NavItem;
+  depth: number;
+}
+
+function flattenToc(items: NavItem[], depth = 0): Chapter[] {
+  return items.flatMap((item) => [{ item, depth }, ...flattenToc(item.subitems ?? [], depth + 1)]);
 }
 
 export class EpubReaderView extends FileView {
@@ -47,11 +53,16 @@ export class EpubReaderView extends FileView {
   private focus = false;
   private location: EpubLocation | null = null;
   private tracker: ReadingTracker | null = null;
-  private toc: NavItem[] = [];
+  private toc: Chapter[] = [];
+  private currentHref = "";
+  private displayedCfi: string | null = null;
+  private navigationAnchor: string | null = null;
+  private queuedJump: string | null = null;
   private preferences: EpubPreferences;
   private area!: HTMLElement;
   private rail!: HTMLElement;
   private panel!: HTMLElement;
+  private panelBody!: HTMLElement;
   private status!: HTMLButtonElement;
   private previousButton!: HTMLButtonElement;
   private nextButton!: HTMLButtonElement;
@@ -89,39 +100,59 @@ export class EpubReaderView extends FileView {
     this.contentEl.removeClass("is-focus");
     this.focus = false;
     this.location = null;
+    this.toc = [];
+    this.currentHref = "";
+    this.displayedCfi = null;
+    this.navigationAnchor = null;
+    this.queuedJump = null;
     this.interacted = false;
     this.navigationPending = false;
     this.anchoredCfi = null;
-    const viewport = this.contentEl.createDiv("epub-pager-viewport");
+    const viewport = this.contentEl.createDiv("epub-pager-viewport pager-reader-viewport");
     this.area = viewport.createDiv("epub-pager-area");
     const message = this.area.createDiv({ cls: "epub-pager-message", text: "正在打开 EPUB…" });
-    this.rail = viewport.createDiv("epub-pager-controls");
+    this.rail = viewport.createDiv("epub-pager-controls pager-reader-rail");
     this.previousButton = icon(this.rail, "chevron-left", "上一屏", () => this.turn(-1));
     this.status = this.rail.createEl("button", { text: "…", attr: { title: "阅读设置", "aria-label": "展开阅读设置", "aria-expanded": "false" } });
     this.status.addEventListener("click", () => this.togglePanel());
     this.nextButton = icon(this.rail, "chevron-right", "下一屏", () => this.turn(1));
-    this.panel = viewport.createDiv("epub-pager-panel");
+    this.panel = viewport.createDiv("epub-pager-panel pager-reader-panel");
     this.panel.hidden = true;
+    const handle = createPanelHeader(this.panel, "EPUB 阅读设置", () => this.togglePanel());
+    bindReaderDrag(lifetime, viewport, this.panel, handle);
+    this.panelBody = this.panel.createDiv();
     this.renderPanel();
     this.applyMargins();
     if (Platform.isMobile) {
-      this.bindMobileRail(lifetime, viewport);
-      this.watchMobileToolbar(lifetime);
+      watchReaderToolbar(lifetime, this.contentEl, this.app.workspace);
       for (const event of ["touchstart", "touchmove"] as const) {
         lifetime.registerDomEvent(this.panel, event, (event) => event.stopPropagation(), { passive: true });
       }
     }
+    this.status.setAttribute("aria-description", "长按拖动翻页控件");
+    bindReaderDrag(lifetime, viewport, this.rail, this.rail, true);
     const activity = () => this.tracker?.activity();
     lifetime.registerDomEvent(this.area, "pointerdown", activity);
     lifetime.registerDomEvent(this.contentEl, "keydown", (event) => this.onKey(event));
     lifetime.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncFocus()));
     lifetime.registerDomEvent(this.containerEl.ownerDocument, "visibilitychange", () => this.syncFocus());
-    const resize = new ResizeObserver(() => this.scheduleLayout());
+    let started = false;
+    const resize = new ResizeObserver(() => {
+      if (started) {
+        this.scheduleLayout();
+      } else if (revision === this.revision && this.area.clientWidth > 1 && this.area.clientHeight > 1) {
+        started = true;
+        void this.loadBook(file, revision, lifetime, message);
+      }
+    });
     resize.observe(this.area);
     lifetime.register(() => resize.disconnect());
     const theme = new MutationObserver(() => this.scheduleLayout());
     theme.observe(this.containerEl.ownerDocument.body, { attributes: true, attributeFilter: ["class", "style"] });
     lifetime.register(() => theme.disconnect());
+  }
+
+  private async loadBook(file: TFile, revision: number, lifetime: Component, message: HTMLElement): Promise<void> {
     try {
       const [data, state] = await Promise.all([this.app.vault.readBinary(file), this.plugin.store.load(file.path)]);
       if (revision !== this.revision) return;
@@ -138,7 +169,17 @@ export class EpubReaderView extends FileView {
         meta.setAttribute("content", "default-src 'none'; img-src blob: data:; style-src 'unsafe-inline' blob: data:; font-src blob: data:; media-src blob: data:");
         doc.head.prepend(meta);
       });
-      message.remove();
+      if (this.area.clientWidth < 2 || this.area.clientHeight < 2) {
+        await new Promise<void>((resolve) => {
+          const resize = new ResizeObserver(() => {
+            if (this.area.clientWidth > 1 && this.area.clientHeight > 1) { resize.disconnect(); resolve(); }
+          });
+          resize.observe(this.area);
+          lifetime.register(() => { resize.disconnect(); resolve(); });
+        });
+        if (revision !== this.revision) return;
+      }
+      this.applyMargins();
       const options = {
         width: Math.max(1, this.area.clientWidth), height: Math.max(1, this.area.clientHeight),
         flow: "paginated", spread: this.pageLayout().columns === 2 ? "auto" : "none", minSpreadWidth: 0,
@@ -149,7 +190,7 @@ export class EpubReaderView extends FileView {
       rendition.hooks.content.register((contents: Contents) => {
         this.styleContents(contents);
         const pressed = (event: PointerEvent) => {
-          activity();
+          this.tracker?.activity();
           if ((event.target as Element | null)?.closest("a[href]")) this.navigationPending = true;
         };
         const key = (event: KeyboardEvent) => this.onKey(event);
@@ -159,7 +200,8 @@ export class EpubReaderView extends FileView {
           contents.document.removeEventListener("pointerdown", pressed);
           contents.document.removeEventListener("keydown", key);
         };
-        this.contentListeners.set(contents.document, cleanup);
+        const removeGestures = Platform.isMobile ? this.bindPageGestures(contents.document) : undefined;
+        this.contentListeners.set(contents.document, () => { cleanup(); removeGestures?.(); });
       });
       rendition.hooks.unloaded.register(() => {
         for (const [document, cleanup] of this.contentListeners) {
@@ -167,16 +209,29 @@ export class EpubReaderView extends FileView {
           if (!connected) { cleanup(); this.contentListeners.delete(document); }
         }
       });
-      rendition.on("relocated", (location: Location) => this.relocated(location));
-      rendition.on("displayError", (error: Error) => new Notice(`EPUB 显示失败：${error.message}`));
+      rendition.on("relocated", (location: Location) => {
+        if (revision === this.revision) this.relocated(location);
+      });
+      // EPUB.js emits this error without settling the display promise.
+      rendition.on("displayError", (error: Error) => {
+        const pending = rendition as Rendition & { displaying?: { reject(reason: Error): void } };
+        pending.displaying?.reject(error);
+      });
       const saved = state.progress?.epub;
-      const target = !this.interacted && validEpubLocation(saved) ? saved.cfi : undefined;
+      let target: string | undefined;
+      if (!this.interacted && validEpubLocation(saved)) {
+        try { if (book.section(saved.cfi)) target = saved.cfi; }
+        catch { /* A malformed saved location must not block opening. */ }
+      }
+      this.anchoredCfi = target ?? null;
       await rendition.display(target).catch(async (error: unknown) => {
         if (!target) throw error;
-        new Notice("保存的位置已失效，已打开书籍开头");
+        this.anchoredCfi = null;
+        new Notice("保存的位置已失效，尝试打开书籍开头");
         await rendition.display();
       });
       if (revision !== this.revision) return;
+      message.remove();
       this.tracker = new ReadingTracker(() => this.isActive(), () => ({
         idleMs: this.plugin.readingIdleMs, dayEndMinutes: this.plugin.readingDayEndMinutes,
       }), async (session) => {
@@ -195,15 +250,19 @@ export class EpubReaderView extends FileView {
       if (revision !== this.revision) return;
       this.ready = false;
       this.area.empty();
-      this.area.createDiv({ cls: "epub-pager-message", text: `无法打开 EPUB：${String(error instanceof Error ? error.message : error)}` });
+      const message = this.area.createDiv({ cls: "epub-pager-message", text: `无法打开 EPUB：${String(error instanceof Error ? error.message : error)}` });
+      message.createEl("button", { text: "重试" }).addEventListener("click", () => void this.onLoadFile(file));
     }
   }
 
   private relocated(value: Location): void {
     if (!value?.start?.cfi || !this.book) return;
-    const nav = this.toc.find((item) => item.href.split("#")[0] === value.start.href.split("#")[0]);
-    const navigating = this.navigationPending && !this.reformatting && this.isActive();
-    const cfi = navigating || !this.anchoredCfi ? value.start.cfi : this.anchoredCfi;
+    this.currentHref = value.start.href;
+    const nav = this.toc.find(({ item }) => item.href.split("#")[0] === this.currentHref)?.item;
+    const navigating = this.navigationPending && !this.reformatting && this.isActive()
+      && (value.start.cfi !== this.displayedCfi || this.navigationAnchor !== null);
+    this.displayedCfi = value.start.cfi;
+    const cfi = navigating ? this.navigationAnchor ?? value.start.cfi : this.anchoredCfi ?? value.start.cfi;
     const percentage = this.book.locations.length() ? this.book.locations.percentageFromCfi(cfi) : 0;
     this.location = {
       cfi, percentage: Math.max(0, Math.min(1, percentage || 0)),
@@ -218,19 +277,67 @@ export class EpubReaderView extends FileView {
     // Reflow/open/background views must never publish a newer reading position.
     if (navigating) {
       this.navigationPending = false;
+      this.navigationAnchor = null;
       this.queueProgress();
     }
   }
 
   turn(direction: -1 | 1): void {
     if (!this.ready || !this.rendition || this.moving || this.reformatting) return;
+    if ((direction === 1 ? this.nextButton : this.previousButton).disabled) return;
     this.interacted = true;
     this.navigationPending = true;
+    this.navigationAnchor = null;
     this.tracker?.activity();
     this.moving = true;
     void (direction === 1 ? this.rendition.next() : this.rendition.prev())
       .catch((error: unknown) => new Notice(`EPUB 翻页失败：${String(error)}`))
       .finally(() => { this.moving = false; });
+  }
+
+  private bindPageGestures(document: Document): () => void {
+    let press: { id: number; x: number; y: number; at: number } | null = null;
+    const start = (event: PointerEvent) => {
+      press = null;
+      if (event.pointerType !== "touch" || !event.isPrimary || !this.ready) return;
+      const target = event.target as Element | null;
+      if (target?.closest("a, button, input, textarea, select, audio, video, [contenteditable]")
+        || document.getSelection()?.isCollapsed === false) return;
+      const frame = document.defaultView?.frameElement;
+      if (!frame) return;
+      const viewportX = frame.getBoundingClientRect().left + event.clientX;
+      const width = this.containerEl.ownerDocument.documentElement.clientWidth;
+      if (viewportX < 22 || viewportX > width - 22) return;
+      press = { id: event.pointerId, x: event.clientX, y: event.clientY, at: event.timeStamp };
+    };
+    const end = (event: PointerEvent) => {
+      const gesture = press;
+      press = null;
+      if (!gesture || event.pointerId !== gesture.id || document.getSelection()?.isCollapsed === false) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      const duration = event.timeStamp - gesture.at;
+      if (Math.abs(dx) >= 55 && Math.abs(dx) > Math.abs(dy) * 1.5 && duration < 750) {
+        this.turn(dx < 0 ? 1 : -1);
+      } else if (Math.hypot(dx, dy) < 10 && duration < 350) {
+        const frame = document.defaultView?.frameElement;
+        if (!frame) return;
+        const area = this.area.getBoundingClientRect();
+        const x = (frame.getBoundingClientRect().left + event.clientX - area.left) / area.width;
+        if (x < 0.28) this.turn(-1);
+        else if (x > 0.72) this.turn(1);
+        else this.togglePanel();
+      }
+    };
+    const cancel = () => { press = null; };
+    document.addEventListener("pointerdown", start);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", cancel);
+    return () => {
+      document.removeEventListener("pointerdown", start);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", cancel);
+    };
   }
 
   private onKey(event: KeyboardEvent): void {
@@ -272,114 +379,9 @@ export class EpubReaderView extends FileView {
     });
   }
 
-  private pageLayout() { return epubPageLayout(this.contentEl.clientWidth, this.preferences, Platform.isMobile); }
-
-  private watchMobileToolbar(lifetime: Component): void {
-    const host = this.contentEl;
-    const document = host.ownerDocument;
-    const selector = ".mobile-navbar, .mobile-toolbar";
-    let bars: HTMLElement[] = [];
-    let inset = -1;
-    const update = () => {
-      const bounds = host.getBoundingClientRect();
-      let covered = 0;
-      for (const bar of bars) {
-        const rect = bar.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0 || getComputedStyle(bar).visibility === "hidden") continue;
-        if (rect.bottom > bounds.top && rect.top < bounds.bottom && rect.right > bounds.left && rect.left < bounds.right) {
-          covered = Math.max(covered, bounds.bottom - rect.top);
-        }
-      }
-      covered = Math.min(Math.ceil(covered), Math.max(0, Math.floor(bounds.height) - 1));
-      if (inset === covered) return;
-      inset = covered;
-      host.setCssProps({ "--epub-toolbar-overlap": `${inset}px` });
-    };
-    const resize = new ResizeObserver(update);
-    const attributes = new MutationObserver(update);
-    const refresh = () => {
-      const next = Array.from(document.querySelectorAll<HTMLElement>(selector));
-      if (next.length !== bars.length || next.some((bar, index) => bar !== bars[index])) {
-        for (const bar of bars) resize.unobserve(bar);
-        attributes.disconnect();
-        bars = next;
-        for (const bar of bars) {
-          resize.observe(bar);
-          attributes.observe(bar, { attributes: true, attributeFilter: ["class", "style", "hidden"] });
-        }
-      }
-      update();
-    };
-    resize.observe(host);
-    refresh();
-    lifetime.registerEvent(this.app.workspace.on("layout-change", refresh));
-    lifetime.registerDomEvent(document, "transitionend", (event) => {
-      if (event.target instanceof HTMLElement && event.target.closest(selector)) refresh();
-    });
-    lifetime.register(() => { resize.disconnect(); attributes.disconnect(); });
-  }
-
-  private bindMobileRail(lifetime: Component, viewport: HTMLElement): void {
-    const rail = this.rail;
-    rail.addClass("is-draggable");
-    this.status.setAttribute("aria-description", "长按拖动翻页控件");
-    let press: { id: number; x: number; y: number; offsetX: number; offsetY: number } | null = null;
-    let timer: number | undefined;
-    let suppressClick = false;
-    const reset = () => {
-      window.clearTimeout(timer);
-      press = null;
-      rail.removeClass("is-dragging");
-    };
-    lifetime.registerDomEvent(rail, "pointerdown", (event) => {
-      event.stopPropagation();
-      if (!event.isPrimary || event.button !== 0) return;
-      reset();
-      suppressClick = false;
-      const { left, top } = rail.getBoundingClientRect();
-      press = { id: event.pointerId, x: event.clientX, y: event.clientY,
-        offsetX: event.clientX - left, offsetY: event.clientY - top };
-      timer = window.setTimeout(() => {
-        suppressClick = true;
-        rail.setPointerCapture(event.pointerId);
-        rail.addClass("is-dragging");
-      }, 500);
-    });
-    lifetime.registerDomEvent(rail, "pointermove", (event) => {
-      if (!press || event.pointerId !== press.id) return;
-      event.stopPropagation();
-      if (!rail.hasClass("is-dragging")) {
-        if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 8) reset();
-        return;
-      }
-      const { left, top } = viewport.getBoundingClientRect();
-      rail.setCssProps({
-        "--epub-rail-left": `${event.clientX - left - press.offsetX}px`,
-        "--epub-rail-top": `${event.clientY - top - press.offsetY}px`,
-        "--epub-rail-width": `${rail.offsetWidth}px`,
-        "--epub-rail-height": `${rail.offsetHeight}px`,
-      });
-      rail.addClass("is-placed");
-    });
-    for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-      lifetime.registerDomEvent(rail, event, (event) => {
-        if (event.type === "lostpointercapture" && event.target !== rail) return;
-        if (press?.id === event.pointerId) reset();
-      });
-    }
-    lifetime.registerDomEvent(rail, "pointerleave", () => {
-      if (!rail.hasClass("is-dragging")) reset();
-    });
-    lifetime.registerDomEvent(rail, "click", (event) => {
-      if (!suppressClick || event.detail === 0) return;
-      event.preventDefault();
-      event.stopPropagation();
-    }, true);
-    lifetime.registerDomEvent(rail, "contextmenu", (event) => event.preventDefault());
-    for (const event of ["touchstart", "touchmove"] as const) {
-      lifetime.registerDomEvent(rail, event, (event) => event.stopPropagation(), { passive: true });
-    }
-    lifetime.register(reset);
+  private pageLayout() {
+    const preferences = Platform.isMobile ? { ...this.preferences, columnGap: DEFAULT_EPUB_PREFERENCES.columnGap } : this.preferences;
+    return epubPageLayout(this.contentEl.clientWidth, preferences, Platform.isMobile);
   }
 
   private styleContents(contents: Contents): void {
@@ -388,12 +390,17 @@ export class EpubReaderView extends FileView {
     contents.css("background-color", style.backgroundColor, true);
     contents.css("font-size", `${this.preferences.fontSize}px`, true);
     contents.css("line-height", String(this.preferences.lineHeight), true);
-    if (this.preferences.font !== "original") contents.css("font-family", this.preferences.font === "serif"
-      ? '"Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif'
-      : '"PingFang SC", "Microsoft YaHei", sans-serif', true);
-    else contents.css("font-family", "", true);
+    const family = this.preferences.font === "serif"
+      ? '"Songti SC", "Noto Serif CJK SC", "Noto Serif CJK", "Source Han Serif SC", SimSun, serif'
+      : '"PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei", sans-serif';
+    void contents.addStylesheetCss(this.preferences.font === "original" ? "/* Original font */" : `@layer pager-font {
+      :where(body, body :is(p, div, li, blockquote, span, a, em, strong, b, i, font, dt, dd, td, th, h1, h2, h3, h4, h5, h6)) {
+        font-family: ${family} !important;
+      }
+    }`, "pager-font");
     void contents.addStylesheetRules({
-      "html, body": { margin: "0 !important", "padding-block": "0 !important", "max-width": "none !important" },
+      ...(Platform.isMobile ? { "html, body, body *": { "touch-action": "pan-y pinch-zoom" } } : {}),
+      "html, body": { margin: "0 !important", "padding-block": "0 !important", "max-width": "none !important", "-webkit-text-size-adjust": "100%", "text-size-adjust": "100%" },
       "body": { "padding-inline": `${this.pageLayout().gap / 2}px !important` },
       "p, li, blockquote": { color: "inherit !important", "font-size": "inherit !important", "line-height": "inherit !important",
         "text-align": "justify !important", "overflow-wrap": "break-word", hyphens: "auto", orphans: "2", widows: "2" },
@@ -431,7 +438,14 @@ export class EpubReaderView extends FileView {
       for (const content of contents) this.styleContents(content);
       if (target) await rendition.display(target);
     } catch (error) { new Notice(`EPUB 排版失败：${String(error)}`); }
-    finally { this.reformatting = false; }
+    finally {
+      if (this.rendition === rendition && this.layoutTimer === null) {
+        this.reformatting = false;
+        const jump = this.queuedJump;
+        this.queuedJump = null;
+        if (jump) this.jump(jump);
+      }
+    }
   }
 
   private togglePanel(): void {
@@ -440,22 +454,17 @@ export class EpubReaderView extends FileView {
   }
 
   private renderPanel(): void {
-    this.panel.empty();
-    const actions = this.panel.createDiv("epub-pager-actions");
-    icon(actions, "list-tree", "目录", () => {
-      new EpubChoiceModal(this.app, "搜索章节", this.toc, (item) => item.label,
-        (item) => this.jump(item.href)).open();
-    });
+    this.panelBody.empty();
+    const actions = this.panelBody.createDiv("pager-reader-actions");
+    icon(actions, "list-tree", "目录", () => this.openToc());
     icon(actions, "bookmark-plus", "添加书签", () => void this.addBookmark());
     icon(actions, "book-marked", "书签列表", () => void this.showBookmarks());
     icon(actions, "file-text", "打开书籍日志", () => { if (this.file) void this.plugin.openReadingNoteForPdf(this.file.path); });
     icon(actions, "bar-chart-3", "阅读日志", () => void this.plugin.openReadingLog());
-    const focus = icon(actions, "maximize-2", "切换专注模式", () => this.toggleFocusMode());
-    focus.setAttribute("aria-pressed", String(this.focus));
-    const close = icon(actions, "x", "关闭阅读设置", () => this.togglePanel());
-    close.addClass("epub-pager-panel-close");
+    const focus = icon(actions, "maximize-2", "进入专注模式", () => this.toggleFocusMode());
+    setFocusButton(focus, this.focus);
     if (!Platform.isMobile) {
-      const spreads = this.panel.createDiv({ cls: "epub-pager-fonts", attr: { role: "group", "aria-label": "页面栏数" } });
+      const spreads = this.panelBody.createDiv({ cls: "epub-pager-fonts", attr: { role: "group", "aria-label": "页面栏数" } });
       for (const [value, label] of [["auto", "自动"], ["single", "单栏"], ["double", "双栏"]] as const) {
         const choice = spreads.createEl("button", { text: label, attr: { "aria-label": label, "aria-pressed": String(this.preferences.spread === value) } });
         choice.addEventListener("click", () => { this.preferences.spread = value; this.savePreferences(); this.renderPanel(); });
@@ -464,10 +473,10 @@ export class EpubReaderView extends FileView {
     const options: Array<[keyof Omit<EpubPreferences, "font" | "spread">, string, number, number, number]> = [
       ["fontSize", "字号", 12, 40, 1], ["lineHeight", "行距", 1.1, 2.5, 0.1],
       ["paragraphGap", "段间距", 0, 2, 0.1], ["marginX", "左右边距", 0, 64, 2], ["marginY", "上下边距", 0, 64, 2],
-      ["columnGap", "双栏中缝", 16, 96, 2],
     ];
+    if (!Platform.isMobile) options.push(["columnGap", "双栏中缝", 16, 96, 2]);
     for (const [key, label, min, max, step] of options) {
-      const row = this.panel.createEl("label", { cls: "epub-pager-option" });
+      const row = this.panelBody.createEl("label", { cls: "epub-pager-option" });
       row.createSpan({ text: label });
       const input = row.createEl("input", { type: "range", attr: { min: String(min), max: String(max), step: String(step), "aria-label": label } });
       input.value = String(this.preferences[key]);
@@ -478,7 +487,7 @@ export class EpubReaderView extends FileView {
         this.savePreferences();
       });
     }
-    const fonts = this.panel.createDiv("epub-pager-fonts");
+    const fonts = this.panelBody.createDiv("epub-pager-fonts");
     for (const [value, label] of [["original", "原字体"], ["serif", "宋体类"], ["sans-serif", "黑体类"]] as const) {
       const choice = fonts.createEl("button", { text: label, attr: { "aria-pressed": String(this.preferences.font === value) } });
       choice.addEventListener("click", () => {
@@ -489,6 +498,56 @@ export class EpubReaderView extends FileView {
     }
   }
 
+  private openToc(): void {
+    const book = this.book;
+    if (!this.ready || !book) { new Notice("正在加载电子书"); return; }
+    if (!this.toc.length) { new Notice("这本书没有目录"); return; }
+    const modal = new Modal(this.app);
+    modal.setTitle("目录");
+    const search = modal.contentEl.createEl("input", { type: "search", attr: { placeholder: "搜索章节", "aria-label": "搜索章节" } });
+    const list = modal.contentEl.createDiv("epub-pager-toc-list");
+    const documents = new Map<string, Promise<Document>>();
+    const rows = this.toc.map(({ item, depth }) => {
+      const label = item.label.trim();
+      const row = list.createEl("button", { cls: "epub-pager-toc-row", attr: { type: "button" } });
+      row.setCssProps({ "--epub-toc-indent": `${Math.min(depth, 5) * 12}px` });
+      row.createSpan({ text: label });
+      const percent = row.createSpan("epub-pager-toc-percent");
+      const [href, fragment] = item.href.split("#");
+      if (!fragment && href === this.currentHref) row.setAttribute("aria-current", "location");
+      let target = Promise.resolve(item.href);
+      const section = book.section(href);
+      if (section && book.locations.length()) {
+        const start = `epubcfi(${section.cfiBase}!/4)`;
+        const show = (cfi: string) => {
+          const value = book.locations.percentageFromCfi(cfi);
+          if (Number.isFinite(value)) percent.textContent = `${(value * 100).toFixed(1)}%`;
+        };
+        if (!fragment) show(start);
+        else {
+          const document = documents.get(href) ?? Promise.resolve(section.load(book.load.bind(book)));
+          documents.set(href, document);
+          target = document.then((root) => {
+            if (this.book !== book) return item.href;
+            const anchor = (root.ownerDocument ?? root).getElementById(decodeURIComponent(fragment));
+            return anchor ? section.cfiFromElement(anchor) : href;
+          }).catch(() => item.href);
+          void target.then((destination) => { if (this.book === book) show(destination.startsWith("epubcfi(") ? destination : start); });
+        }
+      }
+      row.addEventListener("click", () => {
+        modal.close();
+        void target.then((destination) => { if (this.book === book) this.jump(destination); });
+      });
+      return { row, label: label.toLocaleLowerCase() };
+    });
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      for (const { row, label } of rows) row.hidden = !label.includes(query);
+    });
+    modal.open();
+  }
+
   private savePreferences(): void {
     this.app.saveLocalStorage(PREFERENCES_KEY, this.preferences);
     this.applyMargins();
@@ -496,13 +555,19 @@ export class EpubReaderView extends FileView {
   }
 
   private jump(target: string): void {
-    if (!this.ready || !this.rendition) return;
+    const rendition = this.rendition;
+    if (!this.ready || !rendition) return;
+    if (this.reformatting) { this.queuedJump = target; return; }
     this.interacted = true;
-    this.navigationPending = true;
+    this.navigationPending = false;
     this.tracker?.activity();
     this.panel.hidden = true;
     this.status.setAttribute("aria-expanded", "false");
-    void this.rendition.display(target).catch((error: unknown) => new Notice(`EPUB 跳转失败：${String(error)}`));
+    void rendition.display(target).then(() => {
+      if (this.rendition !== rendition) return;
+      this.navigationAnchor = target.startsWith("epubcfi(") ? target : null;
+      this.navigationPending = true;
+    }).catch((error: unknown) => new Notice(`EPUB 跳转失败：${String(error)}`));
   }
 
   async addBookmark(): Promise<void> {

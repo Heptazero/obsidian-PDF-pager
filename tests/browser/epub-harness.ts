@@ -1,6 +1,8 @@
 import { EpubReaderView } from "../../src/epub-view";
 import { StateStore } from "../../src/state-store";
-import { Platform } from "./obsidian-stub";
+import { PagerUi } from "../../src/pager-ui";
+import { ReadingLogView } from "../../src/reading-log-view";
+import { FileView, Platform } from "./obsidian-stub";
 
 const storage = new Map<string, unknown>();
 const files = new Map<string, string>();
@@ -43,3 +45,32 @@ view.file = file as never;
   pause: () => { active = false; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },
   resume: () => { active = true; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },
 };
+
+Object.assign((window as unknown as { harness: object }).harness, {
+  async mountPdf() {
+    await view.onUnloadFile();
+    view.contentEl.remove();
+    const native = new FileView({ app });
+    native.containerEl.style.position = "relative";
+    const noop = () => {};
+    let ui: PagerUi;
+    let focus = false;
+    ui = new PagerUi(app as never, native as never, {
+      previous: noop, next: noop, goTo: noop, addBookmark: noop, deleteBookmark: noop,
+      fit: noop, width: noop, openReadingNote: noop, openReadingLog: noop,
+      toggleFocusMode: () => { focus = !focus; ui.setFocusMode(focus, focus); },
+    });
+    ui.setFile("fixture.pdf", { bookmarks: [] }, 100);
+    (window as unknown as { unmountPdf: () => void }).unmountPdf = () => { ui.destroy(); native.contentEl.remove(); };
+  },
+  mountLog() {
+    const opened: string[] = [];
+    const log = new ReadingLogView({ app } as never, { app, openPdf: (path: string) => opened.push(path) } as never);
+    const grid = log.contentEl.createDiv("pdf-pager-log-grid");
+    const render = log as unknown as { renderBook(parent: HTMLElement, item: unknown): void };
+    for (const name of ["从日志打开一本标题特别长的电子书以确认手机上可以完整阅读书名.epub", "另一份书籍.pdf"]) {
+      render.renderBook(grid, { summary: { pdfPath: name, durationMs: 60_000, minPage: 1, maxPage: 2, sessions: [] }, note: null, status: "unlinked", type: "book" });
+    }
+    (window as unknown as { openedFromLog: string[] }).openedFromLog = opened;
+  },
+});

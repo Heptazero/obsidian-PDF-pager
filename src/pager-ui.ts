@@ -1,4 +1,5 @@
-import { Modal, setIcon, type App, type FileView } from "obsidian";
+import { Component, Modal, Platform, setIcon, type App, type FileView } from "obsidian";
+import { bindReaderDrag, createPanelHeader, setFocusButton, watchReaderToolbar } from "./reader-controls";
 import type { Bookmark, ReadingState } from "./reading-state";
 
 export interface PagerActions {
@@ -10,6 +11,7 @@ export interface PagerActions {
   fit(mode: "page-fit" | "page-width"): void;
   width(factor: number): void;
   openReadingNote(): void;
+  openReadingLog(): void;
   toggleFocusMode(): void;
 }
 
@@ -34,8 +36,13 @@ class DeleteBookmarkModal extends Modal {
 }
 
 export class PagerUi {
-  readonly bar: HTMLDivElement;
+  private lifetime = new Component();
+  private viewport: HTMLDivElement;
+  private details: HTMLDivElement;
   private panel: HTMLDivElement;
+  private resetRailPlacement: () => void;
+  private resetPanelPlacement: () => void;
+  private panelFocus: HTMLButtonElement;
   private pageInput: HTMLInputElement;
   private total: HTMLSpanElement;
   private progress: HTMLSpanElement;
@@ -43,19 +50,10 @@ export class PagerUi {
   private next: HTMLButtonElement;
   private bookmark: HTMLButtonElement;
   private listButton: HTMLButtonElement;
-  private widthButton: HTMLButtonElement;
   private rail: HTMLDivElement;
   private railPrev: HTMLButtonElement;
   private railStatus: HTMLButtonElement;
   private railNext: HTMLButtonElement;
-  private railDragTimer: number | null = null;
-  private railDragging = false;
-  private railPointerId: number | null = null;
-  private railStartX = 0;
-  private railStartY = 0;
-  private railOffsetX = 0;
-  private railOffsetY = 0;
-  private railSuppressClick = false;
   private headerAction: HTMLElement;
   private noteAction: HTMLElement;
   private focusAction: HTMLElement;
@@ -73,46 +71,46 @@ export class PagerUi {
 
   constructor(private app: App, private view: FileView, private actions: PagerActions) {
     view.containerEl.addClass("pdf-pager-host");
-    this.bar = view.containerEl.createDiv("pdf-pager-bar");
-    this.bar.addEventListener("pointerdown", (event) => event.stopPropagation());
-    this.bar.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-    this.bar.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
-    this.bar.addEventListener("keydown", (event) => event.stopPropagation());
-    this.prev = button(this.bar, "chevron-left", "上一页", () => actions.previous());
-    const readout = this.bar.createDiv("pdf-pager-readout");
+    this.lifetime.load();
+    const viewport = this.viewport = view.containerEl.createDiv("pager-reader-viewport");
+    if (Platform.isMobile) watchReaderToolbar(this.lifetime, view.containerEl, app.workspace);
+    this.rail = viewport.createDiv("pager-reader-rail");
+    this.railPrev = button(this.rail, "chevron-left", "上一屏", () => actions.previous());
+    this.railStatus = this.rail.createEl("button", {
+      cls: "pager-reader-status", text: "1/1",
+      attr: { type: "button", "aria-expanded": "false", "aria-description": "长按拖动翻页控件" },
+    });
+    this.railStatus.addEventListener("click", () => this.toggleBar());
+    this.railNext = button(this.rail, "chevron-right", "下一屏", () => actions.next());
+    this.resetRailPlacement = bindReaderDrag(this.lifetime, viewport, this.rail, this.rail, true);
+
+    this.panel = viewport.createDiv("pager-reader-panel");
+    this.panel.hidden = true;
+    const handle = createPanelHeader(this.panel, "PDF 阅读设置", () => this.toggleBar());
+    this.resetPanelPlacement = bindReaderDrag(this.lifetime, viewport, this.panel, handle);
+    for (const event of ["pointerdown", "keydown", "click"] as const) {
+      this.lifetime.registerDomEvent(this.panel, event, (event) => event.stopPropagation());
+    }
+    for (const event of ["touchstart", "touchmove"] as const) {
+      this.lifetime.registerDomEvent(this.panel, event, (event) => event.stopPropagation(), { passive: true });
+    }
+    const toolbar = this.panel.createDiv("pager-reader-actions");
+    this.bookmark = button(toolbar, "bookmark-plus", "给当前页加书签", () => actions.addBookmark());
+    this.listButton = button(toolbar, "book-marked", "书签列表", () => this.togglePanel("bookmarks"));
+    button(toolbar, "expand", "调整页面宽度", () => this.togglePanel("width"));
+    button(toolbar, "file-text", "打开书籍日志", () => actions.openReadingNote());
+    button(toolbar, "bar-chart-3", "阅读日志", () => actions.openReadingLog());
+    this.panelFocus = button(toolbar, "maximize-2", "进入专注模式", () => actions.toggleFocusMode());
+    setFocusButton(this.panelFocus, false);
+    const readout = this.panel.createDiv("pdf-pager-readout");
+    this.prev = button(readout, "chevron-left", "上一页", () => actions.previous());
     this.pageInput = readout.createEl("input", { type: "number", attr: { min: "1", inputmode: "numeric", "aria-label": "PDF 页码" } });
     this.pageInput.addEventListener("change", () => actions.goTo(Number(this.pageInput.value)));
     this.total = readout.createSpan({ text: "/1" });
     this.progress = readout.createSpan({ cls: "pdf-pager-progress", text: "0%" });
-    this.next = button(this.bar, "chevron-right", "下一页", () => actions.next());
-    this.bookmark = button(this.bar, "bookmark-plus", "给当前页加书签", () => actions.addBookmark());
-    this.listButton = button(this.bar, "list", "书签列表", () => this.togglePanel("bookmarks"));
-    this.widthButton = button(this.bar, "expand", "调整页面宽度", () => this.togglePanel("width"));
-    button(this.bar, "file-text", "打开书籍日志", () => actions.openReadingNote());
-    this.panel = view.containerEl.createDiv("pdf-pager-panel");
-    this.panel.hidden = true;
-    this.panel.addEventListener("pointerdown", (event) => event.stopPropagation());
-    this.panel.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-    this.panel.addEventListener("touchmove", (event) => event.stopPropagation(), { passive: true });
-    this.panel.addEventListener("click", (event) => event.stopPropagation());
-    this.panel.addEventListener("keydown", (event) => event.stopPropagation());
-    this.rail = view.containerEl.createDiv("pdf-pager-rail");
-    this.rail.addEventListener("pointerdown", this.onRailPointerDown);
-    this.rail.addEventListener("pointermove", this.onRailPointerMove);
-    this.rail.addEventListener("pointerup", this.onRailPointerUp);
-    this.rail.addEventListener("pointercancel", this.onRailPointerUp);
-    this.rail.addEventListener("click", this.onRailClick, true);
-    this.rail.addEventListener("touchstart", (event) => event.stopPropagation(), { passive: true });
-    this.rail.addEventListener("keydown", (event) => event.stopPropagation());
-    window.addEventListener("orientationchange", this.resetRailPlacement);
-    this.railPrev = button(this.rail, "chevron-left", "上一屏", () => this.actions.previous());
-    this.railStatus = this.rail.createEl("button", {
-      cls: "pdf-pager-rail-status",
-      text: "1/1",
-      attr: { type: "button", "aria-label": "展开 PDF 翻页控制" },
-    });
-    this.railStatus.addEventListener("click", (event) => { event.stopPropagation(); this.toggleBar(); });
-    this.railNext = button(this.rail, "chevron-right", "下一屏", () => this.actions.next());
+    this.next = button(readout, "chevron-right", "下一页", () => actions.next());
+    this.details = this.panel.createDiv("pdf-pager-details");
+    this.details.hidden = true;
     this.headerAction = view.addAction("book-open", "显示或隐藏 PDF 翻页控制", () => this.toggleBar());
     this.noteAction = view.addAction("file-text", "打开关联书籍日志", () => this.actions.openReadingNote());
     this.focusAction = view.addAction("maximize-2", "进入 PDF 专注模式", () => this.actions.toggleFocusMode());
@@ -128,6 +126,7 @@ export class PagerUi {
     this.focusAction.setAttribute("aria-pressed", String(enabled));
     this.focusAction.setAttribute("title", label);
     this.focusAction.setAttribute("data-tooltip-position", "bottom");
+    setFocusButton(this.panelFocus, enabled);
     this.focusAction.toggleClass("is-active", enabled);
     this.view.containerEl.toggleClass("pdf-pager-focus-active", active);
   }
@@ -140,8 +139,9 @@ export class PagerUi {
     this.sliceCount = 1;
     this.panelMode = null;
     this.panel.hidden = true;
-    this.panel.classList.remove("pdf-pager-panel-width");
-    this.bar.classList.remove("is-mobile-expanded");
+    this.details.hidden = true;
+    this.railStatus.setAttribute("aria-expanded", "false");
+    this.resetPanelPlacement();
     this.resetRailPlacement();
     this.render();
   }
@@ -166,25 +166,13 @@ export class PagerUi {
   }
 
   toggleBar(): void {
-    if (window.matchMedia?.("(pointer: coarse)").matches) {
-      const expanded = this.bar.classList.toggle("is-mobile-expanded");
-      if (!expanded) {
-        this.panelMode = null;
-        this.panel.hidden = true;
-      }
-      return;
-    }
-    this.bar.classList.toggle("is-hidden");
-    if (this.bar.classList.contains("is-hidden")) {
-      this.panelMode = null;
-      this.panel.hidden = true;
-    }
+    this.panel.hidden = !this.panel.hidden;
+    this.railStatus.setAttribute("aria-expanded", String(!this.panel.hidden));
   }
 
   private togglePanel(mode: "bookmarks" | "width"): void {
     this.panelMode = this.panelMode === mode ? null : mode;
-    this.panel.hidden = this.panelMode === null;
-    this.panel.classList.toggle("pdf-pager-panel-width", this.panelMode === "width");
+    this.details.hidden = this.panelMode === null;
     this.renderPanel();
   }
 
@@ -219,18 +207,18 @@ export class PagerUi {
   }
 
   private renderPanel(): void {
-    this.panel.empty();
+    this.details.empty();
     this.widthSlider = null;
     this.widthLabel = null;
     if (this.panelMode === "bookmarks") {
-      const heading = this.panel.createDiv("pdf-pager-panel-heading");
+      const heading = this.details.createDiv("pdf-pager-panel-heading");
       heading.createSpan({ text: "书签" });
       button(heading, "bookmark-plus", "给当前页加书签", () => this.actions.addBookmark());
       if (this.state.bookmarks.length === 0) {
-        this.panel.createDiv({ cls: "pdf-pager-empty", text: "还没有书签" });
+        this.details.createDiv({ cls: "pdf-pager-empty", text: "还没有书签" });
       }
       for (const item of this.state.bookmarks) {
-        const row = this.panel.createDiv("pdf-pager-bookmark-row");
+        const row = this.details.createDiv("pdf-pager-bookmark-row");
         const jump = row.createEl("button", { cls: "pdf-pager-bookmark-jump", text: item.label });
         jump.addEventListener("click", () => { this.actions.goTo(item.page); this.togglePanel("bookmarks"); });
         button(row, "trash-2", `删除${item.label}`, () => {
@@ -240,8 +228,8 @@ export class PagerUi {
       return;
     }
     if (this.panelMode === "width") {
-      this.panel.createDiv({ cls: "pdf-pager-panel-heading", text: "最小页面宽度" });
-      const row = this.panel.createDiv("pdf-pager-width-row");
+      this.details.createDiv({ cls: "pdf-pager-panel-heading", text: "最小页面宽度" });
+      const row = this.details.createDiv("pdf-pager-width-row");
       row.createSpan({ text: "窄" });
       const slider = row.createEl("input", { type: "range", attr: { min: "70", max: "160", step: "5", value: String(Math.round(this.factor * 100)), "aria-label": "PDF 最小显示宽度" } });
       const value = row.createSpan({ text: `${Math.round(this.factor * 100)}%` });
@@ -254,98 +242,22 @@ export class PagerUi {
       slider.addEventListener("pointermove", (event) => event.stopPropagation());
       slider.addEventListener("input", () => { value.textContent = `${slider.value}%`; this.actions.width(Number(slider.value) / 100); });
       row.createSpan({ text: "宽" });
-      const fits = this.panel.createDiv("pdf-pager-fit-buttons");
+      const fits = this.details.createDiv("pdf-pager-fit-buttons");
       const whole = fits.createEl("button", { text: "适合整页" });
       whole.addEventListener("click", () => this.actions.fit("page-fit"));
       const wide = fits.createEl("button", { text: "适合宽度" });
       wide.addEventListener("click", () => this.actions.fit("page-width"));
-      this.panel.createDiv({ cls: "pdf-pager-hint", text: "以当前适配方式为 100%。可双指放大，缩小到此宽度为止；不修改 PDF。" });
+      this.details.createDiv({ cls: "pdf-pager-hint", text: "以当前适配方式为 100%。可双指放大，缩小到此宽度为止；不修改 PDF。" });
     }
   }
 
   destroy(): void {
-    this.clearRailDrag();
-    window.removeEventListener("orientationchange", this.resetRailPlacement);
+    this.lifetime.unload();
     this.headerAction.remove();
     this.noteAction.remove();
     this.focusAction.remove();
     this.focusExit.remove();
-    this.bar.remove();
-    this.panel.remove();
-    this.rail.remove();
+    this.viewport.remove();
     this.view.containerEl.removeClass("pdf-pager-host");
   }
-
-  private readonly onRailPointerDown = (event: PointerEvent): void => {
-    event.stopPropagation();
-    if (!event.isPrimary) return;
-    const rect = this.rail.getBoundingClientRect();
-    this.railPointerId = event.pointerId;
-    this.railStartX = event.clientX;
-    this.railStartY = event.clientY;
-    this.railOffsetX = event.clientX - rect.left;
-    this.railOffsetY = event.clientY - rect.top;
-    this.clearRailDragTimer();
-    this.railDragTimer = window.setTimeout(() => {
-      this.railDragging = true;
-      this.rail.classList.add("is-dragging");
-      this.rail.setPointerCapture(event.pointerId);
-    }, 500);
-  };
-
-  private readonly onRailPointerMove = (event: PointerEvent): void => {
-    if (event.pointerId !== this.railPointerId) return;
-    event.stopPropagation();
-    if (!this.railDragging) {
-      const moved = Math.hypot(event.clientX - this.railStartX, event.clientY - this.railStartY);
-      if (moved > 8) this.clearRailDragTimer();
-      return;
-    }
-    event.preventDefault();
-    const host = this.view.containerEl.getBoundingClientRect();
-    const rail = this.rail.getBoundingClientRect();
-    const left = Math.max(4, Math.min(host.width - rail.width - 4, event.clientX - host.left - this.railOffsetX));
-    const top = Math.max(4, Math.min(host.height - rail.height - 4, event.clientY - host.top - this.railOffsetY));
-    this.rail.setCssProps({
-      "--pdf-pager-rail-left": `${left}px`,
-      "--pdf-pager-rail-top": `${top}px`,
-    });
-    this.rail.addClass("is-placed");
-  };
-
-  private readonly onRailPointerUp = (event: PointerEvent): void => {
-    if (event.pointerId !== this.railPointerId) return;
-    event.stopPropagation();
-    if (this.railDragging) {
-      this.railSuppressClick = true;
-      if (this.rail.hasPointerCapture(event.pointerId)) this.rail.releasePointerCapture(event.pointerId);
-      this.rail.classList.remove("is-dragging");
-    }
-    this.clearRailDrag();
-    if (this.railSuppressClick) window.setTimeout(() => { this.railSuppressClick = false; }, 0);
-  };
-
-  private readonly onRailClick = (event: MouseEvent): void => {
-    if (!this.railSuppressClick) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this.railSuppressClick = false;
-  };
-
-  private clearRailDragTimer(): void {
-    if (this.railDragTimer !== null) window.clearTimeout(this.railDragTimer);
-    this.railDragTimer = null;
-  }
-
-  private clearRailDrag(): void {
-    this.clearRailDragTimer();
-    this.railDragging = false;
-    this.railPointerId = null;
-    this.rail.classList.remove("is-dragging");
-  }
-
-  private readonly resetRailPlacement = (): void => {
-    this.clearRailDrag();
-    this.rail.removeClass("is-placed");
-  };
 }
