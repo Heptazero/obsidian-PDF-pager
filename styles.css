@@ -8,6 +8,11 @@
   --epub-margin-y: 24px;
 }
 
+.epub-pager-viewport {
+  position: absolute;
+  inset: 0 0 var(--epub-toolbar-overlap, 0px);
+}
+
 .epub-pager-area {
   position: absolute;
   inset: max(var(--epub-margin-y), env(safe-area-inset-top)) max(42px, var(--epub-margin-x), env(safe-area-inset-right)) max(var(--epub-margin-y), env(safe-area-inset-bottom)) max(42px, var(--epub-margin-x), env(safe-area-inset-left));
@@ -40,6 +45,24 @@
   font-size: 10px;
 }
 
+.epub-pager-controls.is-draggable {
+  touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
+}
+
+.epub-pager-controls.is-dragging {
+  cursor: grabbing;
+}
+
+.epub-pager-controls.is-placed {
+  left: clamp(4px, var(--epub-rail-left), calc(100% - var(--epub-rail-width) - 4px));
+  top: clamp(4px, var(--epub-rail-top), calc(100% - var(--epub-rail-height) - 4px));
+  inset-inline-end: auto;
+  transform: none;
+}
+
 .epub-pager-panel {
   box-sizing: border-box;
   position: absolute;
@@ -64,6 +87,7 @@
 .epub-pager-panel-close { margin-inline-start: auto; }
 .epub-pager-option { display: grid; grid-template-columns: 70px 1fr 36px; gap: 8px; align-items: center; margin-block: 10px; font-size: var(--font-ui-small); }
 .epub-pager-option input { min-width: 0; width: 100%; }
+.is-mobile .epub-pager-option input { touch-action: none; }
 .epub-pager-option output { text-align: end; font-variant-numeric: tabular-nums; }
 .epub-pager-fonts button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
 .epub-pager-message { padding: 24px; color: var(--text-muted); }

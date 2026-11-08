@@ -25,6 +25,7 @@ export class FileView extends Component {
   }
 }
 export class FuzzySuggestModal { setPlaceholder(): void {} open(): void {} }
+export const Platform = { isMobile: false };
 export class Notice { constructor(message: string) { (window as unknown as { notices: string[] }).notices.push(message); } }
 export function setIcon(element: HTMLElement, name: string): void { element.textContent = name === "chevron-left" ? "‹" : name === "chevron-right" ? "›" : "·"; }
 
@@ -41,6 +42,7 @@ prototype.createDiv = function(this: HTMLElement, options: unknown = {}) { retur
 prototype.createSpan = function(this: HTMLElement, options: unknown = {}) { return this.createEl("span", typeof options === "string" ? { cls: options } : options); };
 prototype.empty = function(this: HTMLElement) { this.replaceChildren(); };
 prototype.addClass = function(this: HTMLElement, ...classes: string[]) { this.classList.add(...classes); };
+prototype.hasClass = function(this: HTMLElement, cls: string) { return this.classList.contains(cls); };
 prototype.removeClass = function(this: HTMLElement, ...classes: string[]) { this.classList.remove(...classes); };
 prototype.toggleClass = function(this: HTMLElement, cls: string, value: boolean) { this.classList.toggle(cls, value); };
 prototype.setCssProps = function(this: HTMLElement, values: Record<string, string>) { for (const [key, value] of Object.entries(values)) this.style.setProperty(key, value); };

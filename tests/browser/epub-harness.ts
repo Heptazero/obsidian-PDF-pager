@@ -1,5 +1,6 @@
 import { EpubReaderView } from "../../src/epub-view";
 import { StateStore } from "../../src/state-store";
+import { Platform } from "./obsidian-stub";
 
 const storage = new Map<string, unknown>();
 const files = new Map<string, string>();
@@ -36,6 +37,8 @@ view.file = file as never;
 (window as unknown as Record<string, unknown>).notices = [];
 (window as unknown as Record<string, unknown>).harness = {
   view, store, files, storage,
+  mobile: () => { Platform.isMobile = true; document.body.classList.add("is-mobile"); },
+  layoutChanged: () => { for (const listener of listeners.get("layout-change") ?? []) listener(); },
   open: () => view.onLoadFile(file as never),
   pause: () => { active = false; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },
   resume: () => { active = true; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },

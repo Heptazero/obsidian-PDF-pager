@@ -59,17 +59,48 @@ try {
   await page.waitForFunction(() => !window.harness.view.reformatting);
   await page.locator('[aria-label="展开阅读设置"]').click();
   await page.screenshot({ path: "/tmp/pager-hz-epub-book-spread.png" });
-  await page.setViewportSize({ width: 844, height: 390 });
-  await page.waitForFunction(() => !window.harness.view.reformatting && window.harness.view.rendition._layout.divisor === 1);
   await page.locator('[aria-label="展开阅读设置"]').click();
-  await page.locator('[aria-label="双栏"]').click();
+  await page.locator('[aria-label="单栏"]').click();
+  await page.waitForFunction(() => !window.harness.view.reformatting && window.harness.view.rendition._layout.divisor === 1);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.evaluate(async () => {
+    window.harness.mobile();
+    await window.harness.view.onUnloadFile();
+    await window.harness.open();
+    const toolbar = document.body.createDiv("mobile-navbar");
+    toolbar.style.cssText = "position:fixed;inset:auto 0 0;height:56px;z-index:100";
+    window.harness.layoutChanged();
+  });
   await page.waitForFunction(() => !window.harness.view.reformatting && window.harness.view.rendition._layout.divisor === 2);
   await page.locator('[aria-label="展开阅读设置"]').click();
+  assert.equal(await page.getByRole("group", { name: "页面栏数" }).count(), 0, "mobile hides the desktop layout controls");
+  const toolbar = page.locator(".mobile-navbar");
+  const toolbarTop = (await toolbar.boundingBox()).y;
+  for (const selector of [".epub-pager-area", ".epub-pager-panel"]) {
+    const bounds = await page.locator(selector).boundingBox();
+    assert.ok(bounds.y + bounds.height <= toolbarTop, "the toolbar cannot overlap the EPUB page or settings");
+  }
+  await page.locator('[aria-label="展开阅读设置"]').click();
+  const status = page.getByRole("button", { name: "展开阅读设置" });
+  const start = await status.boundingBox();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: start.x + start.width / 2, y: start.y + start.height / 2 }] });
+  await page.waitForFunction(() => document.querySelector(".epub-pager-controls.is-dragging"));
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 200, y: 382 }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const rail = await page.locator(".epub-pager-controls").boundingBox();
+  assert.ok(rail.x < start.x - 100 && rail.y + rail.height <= toolbarTop, "long press moves the rail and keeps it above the toolbar");
+  assert.equal(await status.getAttribute("aria-expanded"), "false", "dragging does not open settings");
+  await status.tap();
+  assert.equal(await status.getAttribute("aria-expanded"), "true", "a tap still opens settings after dragging");
+  await status.tap();
+  await toolbar.evaluate((element) => { element.hidden = true; });
+  await page.waitForFunction(() => document.querySelector(".epub-pager-viewport").clientHeight === 390);
   await page.screenshot({ path: "/tmp/pager-hz-epub-mobile-spread.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(800);
-  assert.equal(await page.evaluate(() => window.harness.view.rendition._layout.divisor), 1, "portrait falls back to one column without forgetting double-column preference");
-  assert.equal(await page.evaluate(() => window.harness.view.preferences.spread), "double");
+  assert.equal(await page.evaluate(() => window.harness.view.rendition._layout.divisor), 1, "portrait falls back to one column");
+  assert.equal(await page.evaluate(() => window.harness.view.preferences.spread), "single", "mobile does not overwrite a saved desktop layout choice");
   await page.evaluate(() => { const slider = document.querySelector('[aria-label="字号"]'); slider.value = "28"; slider.dispatchEvent(new Event("input")); });
   await page.waitForTimeout(800);
   const fontSize = await page.evaluate(() => {
@@ -113,7 +144,7 @@ try {
   assert.equal(await page.evaluate(() => window.harness.view.ready), false);
   assert.deepEqual(await page.evaluate(() => window.notices.filter((notice) => notice !== "已添加书签")), [], "reader notices must not hide layout errors");
   assert.deepEqual(errors, []);
-  console.log("EPUB browser checks passed: mobile landscape/portrait, pagination, font reflow, stable CFI, sync writes, chapters, bookmarks, close/reopen.");
+  console.log("EPUB browser checks passed: mobile auto layout, toolbar clearance, touch drag, pagination, font reflow, stable CFI, sync writes, chapters, bookmarks, close/reopen.");
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

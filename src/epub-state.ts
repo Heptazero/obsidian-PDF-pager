@@ -32,10 +32,10 @@ export function normalizeEpubPreferences(value: unknown): EpubPreferences {
   };
 }
 
-export function epubPageLayout(width: number, preferences: EpubPreferences): { columns: 1 | 2; gap: number; maxWidth: number } {
+export function epubPageLayout(width: number, preferences: EpubPreferences, mobile = false): { columns: 1 | 2; gap: number; maxWidth: number } {
   const available = Math.max(1, width - 2 * Math.max(42, preferences.marginX));
   const minimum = Math.max(480, preferences.fontSize * 20 + preferences.columnGap * 2);
-  const double = preferences.spread === "double" ? available >= minimum
+  const double = mobile || preferences.spread === "double" ? available >= minimum
     : preferences.spread === "auto" && available >= Math.max(900, minimum);
   return { columns: double ? 2 : 1, gap: double ? preferences.columnGap : 0,
     maxWidth: double ? 1440 : Math.min(900, preferences.fontSize * 36) };
