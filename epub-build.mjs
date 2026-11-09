@@ -45,7 +45,7 @@ export const epubBuild = {
     build.onLoad({ filter: /[\\/]lodash[\\/]_root\.js$/ }, async ({ path }) => ({
       contents: replaceOnce(await readFile(path, "utf8"), "Function('return this')()", "globalThis"),
     }));
-    build.onLoad({ filter: /[\\/]epubjs[\\/]src[\\/](book|contents|rendition|managers[\\/]views[\\/]iframe)\.js$/ }, async ({ path }) => {
+    build.onLoad({ filter: /[\\/]epubjs[\\/]src[\\/](book|contents|locations|rendition|managers[\\/]views[\\/]iframe)\.js$/ }, async ({ path }) => {
       let contents = await readFile(path, "utf8");
       if (path.endsWith("book.js")) {
         // The reader opens Vault files directly and has no separate offline cache.
@@ -54,6 +54,18 @@ export const epubBuild = {
         contents = removeMethod(contents, "\tstore(name) {");
       } else if (path.endsWith("contents.js")) {
         contents = removeMethod(contents, "\taddScript(src) {");
+      } else if (path.endsWith("locations.js")) {
+        // Index a separate document so background work cannot unload a rendered chapter.
+        const start = contents.indexOf("\tprocess(section) {");
+        const end = contents.indexOf("\n\t}", start);
+        if (start === -1 || end === -1) throw new Error("Recheck EPUB locations patch");
+        let process = contents.slice(start, end);
+        process = replaceOnce(process, "section.load(this.request)", "this.request(section.url)");
+        process = replaceOnce(process, "function(contents) {", "function(doc) {\n\t\t\t\tif (!this._locations) return [];");
+        process = replaceOnce(process, "this.parse(contents, section.cfiBase)", "this.parse(doc.documentElement, section.cfiBase)");
+        process = replaceOnce(process, "\n\t\t\t\tsection.unload();\n", "");
+        process = replaceOnce(process, "}.bind(this));", "}.bind(this)).catch(() => []);");
+        contents = contents.slice(0, start) + process + contents.slice(end);
       } else if (path.endsWith("rendition.js")) {
         contents = replaceOnce(contents, '\t\tif (this.settings.script) {\n\t\t\tthis.book.spine.hooks.content.register(this.injectScript.bind(this));\n\t\t}\n');
         contents = removeMethod(contents, "\tinjectScript(doc, section) {");

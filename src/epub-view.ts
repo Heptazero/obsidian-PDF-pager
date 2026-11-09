@@ -46,6 +46,9 @@ export class EpubReaderView extends FileView {
   private lifetime: Component | null = null;
   private revision = 0;
   private ready = false;
+  private indexReady = false;
+  private indexPromise: Promise<void> | null = null;
+  private sectionCount = 1;
   private reformatting = false;
   private moving = false;
   private interacted = false;
@@ -100,6 +103,9 @@ export class EpubReaderView extends FileView {
     this.contentEl.removeClass("is-focus");
     this.focus = false;
     this.location = null;
+    this.indexReady = false;
+    this.indexPromise = null;
+    this.sectionCount = 1;
     this.toc = [];
     this.currentHref = "";
     this.displayedCfi = null;
@@ -133,6 +139,7 @@ export class EpubReaderView extends FileView {
     bindReaderDrag(lifetime, viewport, this.rail, this.rail, true);
     const activity = () => this.tracker?.activity();
     lifetime.registerDomEvent(this.area, "pointerdown", activity);
+    if (Platform.isMobile) lifetime.register(this.bindPageGestures(this.contentEl, this.contentEl.ownerDocument));
     lifetime.registerDomEvent(this.contentEl, "keydown", (event) => this.onKey(event));
     lifetime.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncFocus()));
     lifetime.registerDomEvent(this.containerEl.ownerDocument, "visibilitychange", () => this.syncFocus());
@@ -147,8 +154,15 @@ export class EpubReaderView extends FileView {
     });
     resize.observe(this.area);
     lifetime.register(() => resize.disconnect());
-    const theme = new MutationObserver(() => this.scheduleLayout());
-    theme.observe(this.containerEl.ownerDocument.body, { attributes: true, attributeFilter: ["class", "style"] });
+    const body = this.containerEl.ownerDocument.body;
+    let dark = body.classList.contains("theme-dark");
+    const theme = new MutationObserver(() => {
+      const next = body.classList.contains("theme-dark");
+      if (next === dark) return;
+      dark = next;
+      this.scheduleLayout();
+    });
+    theme.observe(body, { attributes: true, attributeFilter: ["class"] });
     lifetime.register(() => theme.disconnect());
   }
 
@@ -162,6 +176,7 @@ export class EpubReaderView extends FileView {
       await book.ready;
       if (revision !== this.revision) return;
       this.toc = flattenToc(book.navigation.toc);
+      this.sectionCount = (book.spine.last()?.index ?? 0) + 1;
       // The iframe keeps scripts disabled. CSP also prevents remote book assets from making requests.
       book.spine.hooks.content.register((doc: Document) => {
         const meta = createEl("meta");
@@ -200,7 +215,7 @@ export class EpubReaderView extends FileView {
           contents.document.removeEventListener("pointerdown", pressed);
           contents.document.removeEventListener("keydown", key);
         };
-        const removeGestures = Platform.isMobile ? this.bindPageGestures(contents.document) : undefined;
+        const removeGestures = Platform.isMobile ? this.bindPageGestures(contents.document, contents.document, contents.window?.frameElement) : undefined;
         this.contentListeners.set(contents.document, () => { cleanup(); removeGestures?.(); });
       });
       rendition.hooks.unloaded.register(() => {
@@ -238,14 +253,24 @@ export class EpubReaderView extends FileView {
         await this.plugin.store.upsertReadingSession(file.path, session);
         this.plugin.refreshReadingLog();
       });
-      // Generate text-based progress positions, independent of viewport and font size.
-      await book.locations.generate(1000);
-      if (revision !== this.revision) return;
+      if (target && saved?.cfi === this.anchoredCfi) this.location = saved;
       this.ready = true;
       if (rendition.location) this.relocated(rendition.location);
       this.tracker.activity();
       lifetime.registerInterval(window.setInterval(() => this.tracker?.tick(), 10_000));
-      this.scheduleLayout();
+      if (options.width !== this.area.clientWidth || options.height !== this.area.clientHeight) this.scheduleLayout();
+
+      // Rendering and gestures are ready before indexing the rest of the book.
+      this.indexPromise = book.locations.generate(1000).then(() => {
+        if (revision !== this.revision || !book.locations.length()) return;
+        this.indexReady = true;
+        if (rendition.location) this.relocated(rendition.location);
+        if (this.queuedLocation?.location.estimated) {
+          const location = this.queuedLocation.location;
+          location.percentage = book.locations.percentageFromCfi(location.cfi);
+          delete location.estimated;
+        }
+      }).catch(() => { /* The reader can still resume by CFI and report an estimate. */ });
     } catch (error) {
       if (revision !== this.revision) return;
       this.ready = false;
@@ -263,14 +288,18 @@ export class EpubReaderView extends FileView {
       && (value.start.cfi !== this.displayedCfi || this.navigationAnchor !== null);
     this.displayedCfi = value.start.cfi;
     const cfi = navigating ? this.navigationAnchor ?? value.start.cfi : this.anchoredCfi ?? value.start.cfi;
-    const percentage = this.book.locations.length() ? this.book.locations.percentageFromCfi(cfi) : 0;
+    const previous = this.location?.cfi === cfi ? this.location : null;
+    const estimate = (value.start.index + (value.start.displayed.page - 1) / Math.max(1, value.start.displayed.total)) / this.sectionCount;
+    const percentage = this.indexReady ? this.book.locations.percentageFromCfi(cfi)
+      : previous?.percentage ?? (value.atEnd ? 1 : estimate);
     this.location = {
       cfi, percentage: Math.max(0, Math.min(1, percentage || 0)),
       chapter: nav?.label.trim() || `第 ${value.start.index + 1} 章`,
+      ...(!this.indexReady && (!previous || previous.estimated) ? { estimated: true } : {}),
     };
     if (navigating || !this.anchoredCfi) this.anchoredCfi = this.location.cfi;
     this.tracker?.setLocation(this.location);
-    this.status.textContent = `${(this.location.percentage * 100).toFixed(1)}%`;
+    this.status.textContent = `${this.location.estimated ? "≈" : ""}${(this.location.percentage * 100).toFixed(1)}%`;
     this.status.title = `${this.location.chapter} · ${value.start.displayed.page}/${value.start.displayed.total} 屏 · 阅读设置`;
     this.previousButton.disabled = value.atStart;
     this.nextButton.disabled = value.atEnd;
@@ -295,48 +324,49 @@ export class EpubReaderView extends FileView {
       .finally(() => { this.moving = false; });
   }
 
-  private bindPageGestures(document: Document): () => void {
+  private bindPageGestures(target: Document | HTMLElement, document: Document, frame?: Element | null): () => void {
     let press: { id: number; x: number; y: number; at: number } | null = null;
-    const start = (event: PointerEvent) => {
+    const viewportX = (x: number) => (frame?.getBoundingClientRect().left ?? 0) + x;
+    const start = (event: TouchEvent) => {
       press = null;
-      if (event.pointerType !== "touch" || !event.isPrimary || !this.ready) return;
-      const target = event.target as Element | null;
-      if (target?.closest("a, button, input, textarea, select, audio, video, [contenteditable]")
+      if (event.touches.length !== 1 || !this.ready) return;
+      const element = event.target as Element | null;
+      if (element?.closest?.("a, button, input, textarea, select, audio, video, [contenteditable], .pager-reader-rail, .pager-reader-panel")
         || document.getSelection()?.isCollapsed === false) return;
-      const frame = document.defaultView?.frameElement;
-      if (!frame) return;
-      const viewportX = frame.getBoundingClientRect().left + event.clientX;
+      const touch = event.touches[0];
+      const x = viewportX(touch.clientX);
       const width = this.containerEl.ownerDocument.documentElement.clientWidth;
-      if (viewportX < 22 || viewportX > width - 22) return;
-      press = { id: event.pointerId, x: event.clientX, y: event.clientY, at: event.timeStamp };
+      if (x < 22 || x > width - 22) return;
+      press = { id: touch.identifier, x: touch.clientX, y: touch.clientY, at: event.timeStamp };
     };
-    const end = (event: PointerEvent) => {
+    const end = (event: TouchEvent) => {
       const gesture = press;
       press = null;
-      if (!gesture || event.pointerId !== gesture.id || document.getSelection()?.isCollapsed === false) return;
-      const dx = event.clientX - gesture.x;
-      const dy = event.clientY - gesture.y;
+      if (!gesture || document.getSelection()?.isCollapsed === false) return;
+      const touch = Array.from(event.changedTouches).find((touch) => touch.identifier === gesture.id);
+      if (!touch) return;
+      const dx = touch.clientX - gesture.x;
+      const dy = touch.clientY - gesture.y;
       const duration = event.timeStamp - gesture.at;
       if (Math.abs(dx) >= 55 && Math.abs(dx) > Math.abs(dy) * 1.5 && duration < 750) {
         this.turn(dx < 0 ? 1 : -1);
       } else if (Math.hypot(dx, dy) < 10 && duration < 350) {
-        const frame = document.defaultView?.frameElement;
-        if (!frame) return;
-        const area = this.area.getBoundingClientRect();
-        const x = (frame.getBoundingClientRect().left + event.clientX - area.left) / area.width;
+        const bounds = this.contentEl.getBoundingClientRect();
+        const x = (viewportX(touch.clientX) - bounds.left) / bounds.width;
         if (x < 0.28) this.turn(-1);
         else if (x > 0.72) this.turn(1);
         else this.togglePanel();
       }
     };
     const cancel = () => { press = null; };
-    document.addEventListener("pointerdown", start);
-    document.addEventListener("pointerup", end);
-    document.addEventListener("pointercancel", cancel);
+    const surface: EventTarget = target;
+    surface.addEventListener("touchstart", start as EventListener, { passive: true });
+    surface.addEventListener("touchend", end as EventListener, { passive: true });
+    surface.addEventListener("touchcancel", cancel, { passive: true });
     return () => {
-      document.removeEventListener("pointerdown", start);
-      document.removeEventListener("pointerup", end);
-      document.removeEventListener("pointercancel", cancel);
+      surface.removeEventListener("touchstart", start as EventListener);
+      surface.removeEventListener("touchend", end as EventListener);
+      surface.removeEventListener("touchcancel", cancel);
     };
   }
 
@@ -374,7 +404,9 @@ export class EpubReaderView extends FileView {
 
   private applyMargins(): void {
     this.contentEl.setCssProps({
-      "--epub-margin-x": `${this.preferences.marginX}px`, "--epub-margin-y": `${this.preferences.marginY}px`,
+      "--epub-margin-x": `${this.preferences.marginX}px`,
+      "--epub-margin-top": `${this.preferences.marginTop}px`,
+      "--epub-margin-bottom": `${this.preferences.marginBottom}px`,
       "--epub-page-max-width": `${this.pageLayout().maxWidth}px`,
     });
   }
@@ -472,7 +504,8 @@ export class EpubReaderView extends FileView {
     }
     const options: Array<[keyof Omit<EpubPreferences, "font" | "spread">, string, number, number, number]> = [
       ["fontSize", "字号", 12, 40, 1], ["lineHeight", "行距", 1.1, 2.5, 0.1],
-      ["paragraphGap", "段间距", 0, 2, 0.1], ["marginX", "左右边距", 0, 64, 2], ["marginY", "上下边距", 0, 64, 2],
+      ["paragraphGap", "段间距", 0, 2, 0.1], ["marginX", "左右边距", 0, 64, 2],
+      ["marginTop", "顶部留白", 0, 64, 2], ["marginBottom", "底部留白", 0, 64, 2],
     ];
     if (!Platform.isMobile) options.push(["columnGap", "双栏中缝", 16, 96, 2]);
     for (const [key, label, min, max, step] of options) {
@@ -511,20 +544,26 @@ export class EpubReaderView extends FileView {
       const label = item.label.trim();
       const row = list.createEl("button", { cls: "epub-pager-toc-row", attr: { type: "button" } });
       row.setCssProps({ "--epub-toc-indent": `${Math.min(depth, 5) * 12}px` });
-      row.createSpan({ text: label });
+      const chapter = row.createSpan("epub-pager-toc-chapter");
+      chapter.createSpan({ cls: "epub-pager-toc-dot", attr: { "aria-hidden": "true" } });
+      chapter.createSpan({ text: label });
       const percent = row.createSpan("epub-pager-toc-percent");
       const [href, fragment] = item.href.split("#");
       if (!fragment && href === this.currentHref) row.setAttribute("aria-current", "location");
       let target = Promise.resolve(item.href);
       const section = book.section(href);
-      if (section && book.locations.length()) {
+      if (section) {
         const start = `epubcfi(${section.cfiBase}!/4)`;
         const show = (cfi: string) => {
-          const value = book.locations.percentageFromCfi(cfi);
-          if (Number.isFinite(value)) percent.textContent = `${(value * 100).toFixed(1)}%`;
+          if (!this.indexReady) {
+            percent.textContent = `≈${(section.index / this.sectionCount * 100).toFixed(1)}%`;
+          } else {
+            const value = book.locations.percentageFromCfi(cfi);
+            if (Number.isFinite(value)) percent.textContent = `${(value * 100).toFixed(1)}%`;
+          }
         };
-        if (!fragment) show(start);
-        else {
+        show(start);
+        if (fragment) {
           const document = documents.get(href) ?? Promise.resolve(section.load(book.load.bind(book)));
           documents.set(href, document);
           target = document.then((root) => {
@@ -532,8 +571,10 @@ export class EpubReaderView extends FileView {
             const anchor = (root.ownerDocument ?? root).getElementById(decodeURIComponent(fragment));
             return anchor ? section.cfiFromElement(anchor) : href;
           }).catch(() => item.href);
-          void target.then((destination) => { if (this.book === book) show(destination.startsWith("epubcfi(") ? destination : start); });
         }
+        void Promise.all([target, this.indexPromise]).then(([destination]) => {
+          if (this.book === book && row.isConnected) show(destination.startsWith("epubcfi(") ? destination : start);
+        });
       }
       row.addEventListener("click", () => {
         modal.close();

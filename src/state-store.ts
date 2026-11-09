@@ -234,7 +234,7 @@ export class StateStore {
   addEpubBookmark(path: string, location: EpubLocation): Promise<ReadingState> {
     return this.edit(path, (record, now) => {
       const bookmark: Bookmark = {
-        id: uid(), page: 1, label: `${location.chapter} · ${(location.percentage * 100).toFixed(1)}%`,
+        id: uid(), page: 1, label: `${location.chapter} · ${location.estimated ? "≈" : ""}${(location.percentage * 100).toFixed(1)}%`,
         epub: { ...location }, updatedAt: now,
       };
       record.bookmarks[bookmark.id] = bookmark;

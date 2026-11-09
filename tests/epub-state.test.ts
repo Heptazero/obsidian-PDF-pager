@@ -9,7 +9,11 @@ test("EPUB preferences reject corrupt numbers and clamp mobile layout limits", (
   const preferences = normalizeEpubPreferences({ fontSize: Infinity, marginX: -1, marginY: 999, font: "invalid" });
   assert.equal(preferences.fontSize, 20);
   assert.equal(preferences.marginX, 0);
-  assert.equal(preferences.marginY, 64);
+  assert.equal(preferences.marginTop, 64);
+  assert.equal(preferences.marginBottom, 64);
+  assert.equal(normalizeEpubPreferences({ marginY: 24, marginTop: 8, marginBottom: 0 }).marginBottom, 0);
+  assert.equal(normalizeEpubPreferences({ marginY: 24, marginTop: 8 }).marginTop, 8);
+  assert.equal(normalizeEpubPreferences({ marginY: 24, marginTop: 8 }).marginBottom, 24);
   assert.equal(preferences.font, "serif");
   assert.equal(validEpubLocation({ cfi: "epubcfi(/6/2!/4/2/1:0)", percentage: NaN, chapter: "A" }), false);
 });

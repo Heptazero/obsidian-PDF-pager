@@ -1,3 +1,4 @@
+import Locations from "epubjs/src/locations.js";
 import { EpubReaderView } from "../../src/epub-view";
 import { StateStore } from "../../src/state-store";
 import { PagerUi } from "../../src/pager-ui";
@@ -42,6 +43,15 @@ view.file = file as never;
   mobile: () => { Platform.isMobile = true; document.body.classList.add("is-mobile"); },
   layoutChanged: () => { for (const listener of listeners.get("layout-change") ?? []) listener(); },
   open: () => view.onLoadFile(file as never),
+  holdNextIndex: () => {
+    const original = Locations.prototype.generate;
+    Locations.prototype.generate = function (chars: number) {
+      Locations.prototype.generate = original;
+      return new Promise<void>((resolve) => {
+        (window as unknown as { resumeIndex: () => void }).resumeIndex = resolve;
+      }).then(() => original.call(this, chars));
+    };
+  },
   pause: () => { active = false; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },
   resume: () => { active = true; for (const listener of listeners.get("active-leaf-change") ?? []) listener(); },
 };

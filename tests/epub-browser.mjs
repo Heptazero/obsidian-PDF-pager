@@ -100,9 +100,19 @@ try {
   const chapter = page.locator(".epub-pager-toc-row", { hasText: "第一节" });
   await chapter.getByText(/\d+\.\d+%/).waitFor();
   assert.equal(await chapter.evaluate((row) => row.style.getPropertyValue("--epub-toc-indent")), "12px");
+  assert.equal(await chapter.locator(".epub-pager-toc-dot").count(), 1);
+  assert.equal(await chapter.evaluate((row) => getComputedStyle(row).borderRadius), "0px");
   await page.getByLabel("搜索章节").fill("第二章");
   assert.equal(await page.locator(".epub-pager-toc-row:visible").count(), 1);
   await page.evaluate(() => document.querySelector(".epub-pager-toc-list").parentElement.remove());
+  for (const [label, value] of [["顶部留白", "16"], ["底部留白", "8"]]) {
+    await page.getByLabel(label, { exact: true }).evaluate((slider, value) => {
+      slider.value = value;
+      slider.dispatchEvent(new Event("input"));
+    }, value);
+  }
+  const positioned = await page.locator(".epub-pager-area").boundingBox();
+  assert.equal(positioned.y, 16);
   const toolbar = page.locator(".mobile-navbar");
   const toolbarTop = (await toolbar.boundingBox()).y;
   for (const selector of [".epub-pager-area", ".epub-pager-panel"]) {
@@ -132,6 +142,9 @@ try {
   await page.getByRole("button", { name: "关闭阅读设置" }).tap();
   await toolbar.evaluate((element) => { element.hidden = true; });
   await page.waitForFunction(() => document.querySelector(".epub-pager-viewport").clientHeight === 390);
+  const expanded = await page.locator(".epub-pager-area").boundingBox();
+  assert.equal(expanded.y, positioned.y, "toolbar collapse does not move the top margin");
+  assert.equal(expanded.height - positioned.height, 56);
   await page.screenshot({ path: "/tmp/pager-hz-epub-mobile-spread.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(800);
@@ -202,10 +215,20 @@ try {
   await page.evaluate(() => window.harness.pause());
   await page.evaluate(() => window.harness.view.onUnloadFile());
   assert.equal(await page.locator("iframe").count(), 0);
-  await page.evaluate(() => { window.harness.resume(); return window.harness.open(); });
+  await page.evaluate(() => { window.harness.holdNextIndex(); window.harness.resume(); return window.harness.open(); });
   await page.waitForFunction(() => window.harness.view.ready && !window.harness.view.reformatting);
   assert.equal(await page.evaluate(() => window.harness.view.location.chapter), "第二章");
   assert.deepEqual(await page.evaluate(async () => (await window.harness.store.load("fixture.epub")).progress.epub), last, "reopening never updates the saved timestamp or position");
+  await page.waitForFunction(() => window.resumeIndex && window.harness.view.location);
+  assert.equal(await page.evaluate(() => window.harness.view.indexReady), false);
+  const earlyArea = await page.locator(".epub-pager-area").boundingBox();
+  const earlyCfi = await currentAnchor();
+  await page.touchscreen.tap(earlyArea.x + earlyArea.width * 0.87, earlyArea.y + earlyArea.height / 2);
+  await waitTurn(earlyCfi);
+  assert.equal(await page.evaluate(() => window.harness.view.location.estimated), true);
+  await page.evaluate(() => window.resumeIndex());
+  await page.waitForFunction(() => window.harness.view.indexReady);
+  assert.equal(await page.evaluate(() => window.harness.view.location.estimated), undefined);
   await page.screenshot({ path: "/tmp/pdf-pager-epub-landscape.png" });
   await page.locator('[aria-label="展开阅读设置"]').click();
   const panel = await page.locator(".epub-pager-panel").boundingBox();

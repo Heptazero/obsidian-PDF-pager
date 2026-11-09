@@ -1,6 +1,7 @@
 export interface EpubLocation {
   cfi: string;
   percentage: number;
+  estimated?: true;
   chapter: string;
 }
 
