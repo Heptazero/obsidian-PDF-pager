@@ -3,11 +3,12 @@ import { EpubReaderView } from "../../src/epub-view";
 import { StateStore } from "../../src/state-store";
 import { PagerUi } from "../../src/pager-ui";
 import { ReadingLogView } from "../../src/reading-log-view";
-import { FileView, Platform } from "./obsidian-stub";
+import { FileView, Platform, fontRequests } from "./obsidian-stub";
 
 const storage = new Map<string, unknown>();
 const files = new Map<string, string>();
 const folders = new Set<string>();
+const fontFiles = new Map<string, ArrayBuffer>();
 const listeners = new Map<string, Array<() => void>>();
 const app = {
   loadLocalStorage: (key: string) => storage.get(key),
@@ -16,11 +17,13 @@ const app = {
     getName: () => "browser-test", configDir: ".obsidian",
     readBinary: async () => (await fetch("/fixture.epub")).arrayBuffer(),
     adapter: {
-      exists: async (path: string) => files.has(path) || folders.has(path),
+      exists: async (path: string) => files.has(path) || folders.has(path) || fontFiles.has(path),
       list: async (path: string) => ({ files: [...files.keys()].filter((file) => file.startsWith(path + "/")) }),
       read: async (path: string) => { if (!files.has(path)) throw Error("missing"); return files.get(path); },
       write: async (path: string, value: string) => { files.set(path, value); },
       mkdir: async (path: string) => { folders.add(path); },
+      readBinary: async (path: string) => fontFiles.get(path),
+      writeBinary: async (path: string, data: ArrayBuffer) => { fontFiles.set(path, data); },
     },
   },
   workspace: {
@@ -32,7 +35,7 @@ const app = {
   },
 };
 const store = new StateStore(app as never, "records");
-const plugin = { app, store, readingIdleMs: 300000, readingDayEndMinutes: 0, refreshReadingLog() {}, syncFocusMode() {}, openReadingLog() {} };
+const plugin = { app, store, manifest: { id: "pdf-pager-hz" }, readingIdleMs: 300000, readingDayEndMinutes: 0, refreshReadingLog() {}, syncFocusMode() {}, openReadingLog() {} };
 let active = true;
 const view = new EpubReaderView({ app } as never, plugin as never);
 const file = { path: "fixture.epub", basename: "测试电子书", extension: "epub" };
@@ -40,6 +43,7 @@ view.file = file as never;
 (window as unknown as Record<string, unknown>).notices = [];
 (window as unknown as Record<string, unknown>).harness = {
   view, store, files, storage,
+  fontRequests: () => fontRequests,
   mobile: () => { Platform.isMobile = true; document.body.classList.add("is-mobile"); },
   layoutChanged: () => { for (const listener of listeners.get("layout-change") ?? []) listener(); },
   open: () => view.onLoadFile(file as never),

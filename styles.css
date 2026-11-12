@@ -15,9 +15,18 @@
   pointer-events: none;
 }
 
+.is-mobile .view-content.epub-pager {
+  overflow: visible;
+}
+
+.epub-pager-viewport {
+  top: var(--epub-viewport-top-offset, 0px);
+  background: inherit;
+}
+
 .epub-pager-area {
   position: absolute;
-  top: max(var(--epub-margin-top), env(safe-area-inset-top));
+  top: calc(var(--epub-margin-top) + max(0px, env(safe-area-inset-top) - var(--epub-viewport-screen-top, 0px)));
   right: max(42px, var(--epub-margin-x), env(safe-area-inset-right));
   bottom: max(var(--epub-margin-bottom), calc(env(safe-area-inset-bottom) - var(--pager-toolbar-overlap, 0px)));
   left: max(42px, var(--epub-margin-x), env(safe-area-inset-left));

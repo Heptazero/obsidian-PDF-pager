@@ -34,6 +34,14 @@ export class ItemView extends FileView {}
 export class TFile {}
 export class FuzzySuggestModal { setPlaceholder(): void {} open(): void {} }
 export const Platform = { isMobile: false };
+export let fontRequests = 0;
+export async function requestUrl({ url }: { url: string }): Promise<{ arrayBuffer: ArrayBuffer }> {
+  if (!url.endsWith("/NotoSerifCJKsc-Regular.otf")) throw new Error("Unexpected URL");
+  fontRequests++;
+  const response = await fetch("/fixture.otf");
+  if (!response.ok) throw new Error("No font fixture");
+  return { arrayBuffer: await response.arrayBuffer() };
+}
 export class Notice { constructor(message: string) { (window as unknown as { notices: string[] }).notices.push(message); } }
 export function setIcon(element: HTMLElement, name: string): void { element.dataset.icon = name; element.textContent = name === "chevron-left" ? "‹" : name === "chevron-right" ? "›" : "·"; }
 

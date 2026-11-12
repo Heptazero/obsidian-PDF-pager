@@ -62,7 +62,7 @@ Pager HZ records active reading sessions, groups nearby sessions for display, an
 
 ### Privacy and scope
 
-- Works offline with no accounts, advertisements, telemetry, or network requests.
+- Reading works offline with no accounts, advertisements, or telemetry. The optional Chinese serif font download connects to GitHub when requested.
 - Leaves the original PDF unchanged.
 - Uses Obsidian's internal PDF.js viewer interface. An Obsidian update may require a compatibility update to `src/native-viewer.ts`.
 
@@ -114,7 +114,7 @@ Pager HZ 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 P
 如果文件列表中看不到 EPUB，先重新加载 Pager HZ，再执行 **Pager HZ：修复电子书文件识别**。Obsidian 关闭“显示所有类型文件”时会隐藏没有阅读器识别的 EPUB；Pager HZ 会在界面刷新时补回缺失的 EPUB 注册，也可用该命令立即检查。其他已启用阅读器仍保留自己的打开方式。
 
 - 桌面排版可选“自动 / 单栏 / 双栏”。移动端根据阅读区域宽度、字号和中缝自动决定栏数，空间足够时显示双栏。单栏限制行宽并居中，双栏中缝仅桌面可调。箭头翻过当前一屏的全部栏；也支持 `←` / `→` 和 `PageUp` / `PageDown`。
-- 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右边距、顶部留白和底部留白，并选择原字体、宋体类或黑体类字体。新安装默认使用书页风格的衬线字体、正文两端对齐和中性文字颜色，已有字体与字号选择保留。字体的具体外观取决于设备已安装字体。
+- 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右边距、顶部留白和底部留白，并选择原字体、宋体类或黑体类字体。新安装默认使用书页风格的衬线字体、正文两端对齐和中性文字颜色，已有字体与字号选择保留。移动端可点「下载中文宋体」，从 GitHub 获取约 25 MB 的 Noto Serif CJK SC，保存到插件目录后可离线使用。
 - 同一面板提供可搜索目录、添加书签、书签跳转、关联书籍日志、阅读日志和专注模式。PDF 与 EPUB 共用浮动控制样式，拖动设置面板的标题栏可移动面板。手机长按翻页控件可拖动，靠近顶边或底边时自动横排。EPUB 手机端可轻点正文两侧或左右滑动翻屏，轻点中间开关设置。
 - 使用 EPUB CFI（定位到书内文字的标识）保存位置。旋转、修改排版和重新打开会回到该文字所在的一屏；屏幕起点可能因重新分页稍有不同。打开和重新排版不会更新同步进度，主动翻屏与章节跳转才会保存。
 - 与 PDF 共用设置中的阅读记录目录、按设备记录、计时规则、分类、图表和手动结算。EPUB 在日志中显示百分比范围，例如 `[EPUB 10.0%–20.0%]`，不把动态屏数当固定页码。关联笔记可引用 EPUB 文件，或在日志卡片中手动选择。

@@ -19,10 +19,12 @@ const fixture = await zip.generateAsync({ type: "nodebuffer", compression: "DEFL
 await build({ plugins: [epubBuild], entryPoints: ["tests/browser/epub-harness.ts"], bundle: true, outfile: path.join(directory, "test.js"), platform: "browser", format: "iife", alias: { obsidian: path.resolve("tests/browser/obsidian-stub.ts") } });
 const script = await readFile(path.join(directory, "test.js"));
 const css = await readFile("styles.css");
+const font = process.env.PAGER_TEST_SERIF_FONT ? await readFile(process.env.PAGER_TEST_SERIF_FONT) : null;
 const server = http.createServer((request, response) => {
   if (request.url === "/test.js") { response.setHeader("Content-Type", "text/javascript"); response.end(script); }
   else if (request.url === "/styles.css") { response.setHeader("Content-Type", "text/css"); response.end(css); }
   else if (request.url === "/fixture.epub") response.end(fixture);
+  else if (request.url === "/fixture.otf" && font) response.end(font);
   else response.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="/styles.css"/><style>:root{--background-primary:#fff;--background-primary-alt:#eee;--text-normal:#222;--background-modifier-border:#ccc;--text-muted:#666}body{margin:0}#host,.view-content{height:100dvh;width:100%;}button{cursor:pointer}</style></head><body><div id="host"></div><script src="/test.js"></script></body></html>');
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -82,6 +84,8 @@ try {
   await page.setViewportSize({ width: 844, height: 390 });
   await page.evaluate(async () => {
     window.harness.mobile();
+    document.querySelector("#host").style.cssText = "position:absolute;top:36px;bottom:0;height:auto";
+    window.harness.view.contentEl.style.height = "100%";
     await window.harness.view.onUnloadFile();
     await window.harness.open();
     const toolbar = document.body.createDiv("mobile-navbar");
@@ -112,7 +116,7 @@ try {
     }, value);
   }
   const positioned = await page.locator(".epub-pager-area").boundingBox();
-  assert.equal(positioned.y, 16);
+  assert.equal(positioned.y, 52, "the top margin is added to the native leaf origin");
   const toolbar = page.locator(".mobile-navbar");
   const toolbarTop = (await toolbar.boundingBox()).y;
   for (const selector of [".epub-pager-area", ".epub-pager-panel"]) {
@@ -140,12 +144,19 @@ try {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   assert.equal(await page.locator(".epub-pager-panel.is-placed").count(), 1);
   await page.getByRole("button", { name: "关闭阅读设置" }).tap();
-  await toolbar.evaluate((element) => { element.hidden = true; });
-  await page.waitForFunction(() => document.querySelector(".epub-pager-viewport").clientHeight === 390);
+  await toolbar.evaluate((element) => {
+    element.hidden = true;
+    document.querySelector("#host").style.top = "56px";
+  });
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector(".epub-pager-viewport").getBoundingClientRect();
+    return viewport.top === 36 && viewport.bottom === 390;
+  });
   const expanded = await page.locator(".epub-pager-area").boundingBox();
   assert.equal(expanded.y, positioned.y, "toolbar collapse does not move the top margin");
   assert.equal(expanded.height - positioned.height, 56);
   await page.screenshot({ path: "/tmp/pager-hz-epub-mobile-spread.png" });
+  await page.evaluate(() => { document.querySelector("#host").style.cssText = ""; window.harness.view.contentEl.style.height = ""; });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(800);
   assert.equal(await page.evaluate(() => window.harness.view.rendition._layout.divisor), 1, "portrait falls back to one column");
@@ -233,6 +244,40 @@ try {
   await page.locator('[aria-label="展开阅读设置"]').click();
   const panel = await page.locator(".epub-pager-panel").boundingBox();
   assert.ok(panel.x >= 0 && panel.y >= 0 && panel.x + panel.width <= 844 && panel.y + panel.height <= 390, "reading controls stay within the landscape viewport");
+  if (font) {
+    await page.getByRole("button", { name: "下载中文宋体（约 25 MB）" }).tap();
+    await page.waitForFunction(() => {
+      const doc = document.querySelector("iframe")?.contentDocument;
+      return doc && [...doc.fonts].some((face) => face.family === "Pager HZ Chinese Serif" && face.status === "loaded");
+    });
+    await page.locator("iframe").evaluate((frame) => {
+      const doc = frame.contentDocument;
+      const probe = doc.createElement("span");
+      probe.id = "chinese-font-probe";
+      probe.textContent = "中文宋体测试";
+      doc.body.append(probe);
+    });
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
+    function findProbe(node) {
+      if (node.attributes?.includes("chinese-font-probe")) return node.nodeId;
+      for (const child of [...(node.children ?? []), ...(node.contentDocument ? [node.contentDocument] : [])]) {
+        const found = findProbe(child);
+        if (found) return found;
+      }
+    }
+    const nodeId = findProbe(root);
+    assert.ok(nodeId, "the Chinese-only probe exists in the EPUB frame");
+    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+    assert.ok(fonts.some((font) => font.isCustomFont && /Noto Serif CJK SC/.test(font.familyName) && font.glyphCount >= 6), JSON.stringify(fonts));
+    await page.evaluate(async () => {
+      await window.harness.view.onClose();
+      await window.harness.open();
+    });
+    await page.waitForFunction(() => window.harness.view.ready && window.harness.view.serifFontUrl);
+    assert.equal(await page.evaluate(() => window.harness.fontRequests()), 1, "reopening restores the Chinese serif font offline");
+  }
   await page.evaluate(async () => {
     await window.harness.view.onUnloadFile();
     await Promise.all([window.harness.open(), window.harness.view.onUnloadFile()]);

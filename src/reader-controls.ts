@@ -1,12 +1,33 @@
 import { setIcon, type Component, type Workspace } from "obsidian";
 
-export function watchReaderToolbar(lifetime: Component, host: HTMLElement, workspace: Workspace): void {
+export function watchReaderToolbar(lifetime: Component, host: HTMLElement, workspace: Workspace, keepTop = false): void {
   const document = host.ownerDocument;
   const selector = ".mobile-navbar, .mobile-toolbar";
   let bars: HTMLElement[] = [];
   let inset = -1;
+  let screenTop: number | undefined;
+  let width = 0;
+  let topOffset: number | undefined;
+  const orientation = document.defaultView?.matchMedia("(orientation: portrait)");
+  let portrait = orientation?.matches;
   const update = () => {
     const bounds = host.getBoundingClientRect();
+    if (bounds.width < 1 || bounds.height < 1) return;
+    if (keepTop) {
+      const nextPortrait = orientation?.matches;
+      const nextWidth = document.documentElement.clientWidth;
+      if (screenTop === undefined || portrait !== nextPortrait || width !== nextWidth) {
+        screenTop = bounds.top;
+        width = nextWidth;
+        portrait = nextPortrait;
+        host.setCssProps({ "--epub-viewport-screen-top": `${screenTop}px` });
+      }
+      const offset = screenTop - bounds.top;
+      if (offset !== topOffset) {
+        topOffset = offset;
+        host.setCssProps({ "--epub-viewport-top-offset": `${offset}px` });
+      }
+    }
     let covered = 0;
     for (const bar of bars) {
       const rect = bar.getBoundingClientRect();
@@ -21,6 +42,13 @@ export function watchReaderToolbar(lifetime: Component, host: HTMLElement, works
     host.setCssProps({ "--pager-toolbar-overlap": `${inset}px` });
   };
   const resize = new ResizeObserver(update);
+  const layoutChanges = new MutationObserver(update);
+  if (keepTop) {
+    // Obsidian can reposition the leaf without resizing its content.
+    for (let element = host.parentElement; element; element = element.parentElement) {
+      layoutChanges.observe(element, { attributes: true, attributeFilter: ["class", "style"] });
+    }
+  }
   const attributes = new MutationObserver(update);
   const refresh = () => {
     const next = Array.from(document.querySelectorAll<HTMLElement>(selector));
@@ -39,9 +67,12 @@ export function watchReaderToolbar(lifetime: Component, host: HTMLElement, works
   refresh();
   lifetime.registerEvent(workspace.on("layout-change", refresh));
   lifetime.registerDomEvent(document, "transitionend", (event) => {
-    if (event.target instanceof HTMLElement && event.target.closest(selector)) refresh();
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.closest(selector)) refresh();
+    else if (keepTop && target.contains(host)) update();
   });
-  lifetime.register(() => { resize.disconnect(); attributes.disconnect(); });
+  lifetime.register(() => { resize.disconnect(); attributes.disconnect(); layoutChanges.disconnect(); });
 }
 
 export function setFocusButton(button: HTMLElement, focused: boolean): void {
