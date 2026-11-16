@@ -37,7 +37,8 @@ Pager HZ records active reading sessions, groups nearby sessions for display, an
 - Recalculates stops after pinch zoom, page-width changes, or orientation changes.
 - Uses a configurable minimum page width: pinch to zoom in freely, then zoom out only to the selected floor.
 - Provides previous/next screen controls, page-number input, keyboard shortcuts, and Obsidian commands.
-- Keeps navigation controls away from the PDF text area so text selection and dictionary plugins can still receive taps.
+- Offers optional tap-to-turn for PDFs on mobile. Enable **PDF 轻点左右翻页** in Pager HZ settings to tap the left or right half of the reader for the previous or next screen. This is off by default for readers who tap words to look them up.
+- Keeps floating navigation controls away from the PDF text area to leave more room for reading and text selection.
 - Includes a PDF-only Zen mode that leaves only the PDF page, Pager HZ controls, and the floating exit button visible. It hides Obsidian navigation chrome, the native PDF toolbar, search bar, thumbnail sidebar, and scrollbars while the focused PDF tab is active. The floating button or `Escape` restores the interface.
 
 ### Reading position, bookmarks, and cross-device records
@@ -62,7 +63,7 @@ Pager HZ records active reading sessions, groups nearby sessions for display, an
 
 ### Privacy and scope
 
-- Reading works offline with no accounts, advertisements, or telemetry. The optional Chinese serif font download connects to GitHub when requested.
+- Reading works offline with no accounts, advertisements, or telemetry.
 - Leaves the original PDF unchanged.
 - Uses Obsidian's internal PDF.js viewer interface. An Obsidian update may require a compatibility update to `src/native-viewer.ts`.
 
@@ -101,6 +102,7 @@ Pager HZ 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 P
 ### 其他阅读控制
 
 - 桌面端或连接键盘时，`←` / `PageUp` 翻上一屏（上一页），`→` / `PageDown` 翻下一屏（下一页）。可在 Obsidian 设置 → 快捷键中修改“PDF：上一屏/上一页”和“PDF：下一屏/下一页”。
+- 手机可在 Obsidian 设置 → Pager HZ 打开「PDF 轻点左右翻页」。轻点正文区左半边翻上一屏，右半边翻下一屏，横屏分屏时逐屏翻。默认关闭，方便单击查词。
 - 底部控制条支持翻页、输入页码、添加/查看/删除书签，并显示阅读百分比和当前分屏位置。
 - 宽度滑块设置页面的最小显示宽度。双指可以继续放大，缩小到这个下限即停止；拖动滑块时保留高于下限的双指放大倍率。“适合整页”和“适合宽度”会重置适配基准。
 - 移动端宽度面板会居中并隔离边缘拖动，避免误展开 Obsidian 侧边栏。
@@ -114,7 +116,7 @@ Pager HZ 直接增强 Obsidian 原生 PDF 标签页，每次居中显示一张 P
 如果文件列表中看不到 EPUB，先重新加载 Pager HZ，再执行 **Pager HZ：修复电子书文件识别**。Obsidian 关闭“显示所有类型文件”时会隐藏没有阅读器识别的 EPUB；Pager HZ 会在界面刷新时补回缺失的 EPUB 注册，也可用该命令立即检查。其他已启用阅读器仍保留自己的打开方式。
 
 - 桌面排版可选“自动 / 单栏 / 双栏”。移动端根据阅读区域宽度、字号和中缝自动决定栏数，空间足够时显示双栏。单栏限制行宽并居中，双栏中缝仅桌面可调。箭头翻过当前一屏的全部栏；也支持 `←` / `→` 和 `PageUp` / `PageDown`。
-- 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右边距、顶部留白和底部留白，并选择原字体、宋体类或黑体类字体。新安装默认使用书页风格的衬线字体、正文两端对齐和中性文字颜色，已有字体与字号选择保留。移动端可点「下载中文宋体」，从 GitHub 获取约 25 MB 的 Noto Serif CJK SC，保存到插件目录后可离线使用。
+- 点击右侧进度百分比展开阅读设置，可调整字号、行距、段间距、左右边距、顶部留白和底部留白，并选择原字体、宋体类或黑体类字体。新安装默认使用书页风格的衬线字体、正文两端对齐和中性文字颜色，已有字体与字号选择保留。手机点「宋体」即可离线使用随插件附带的常用中文宋体。字库基于 Noto Serif CJK SC 2.003，覆盖 GB2312 和基础拉丁字符，按 SIL Open Font License 1.1 分发。字库之外的字符使用系统回退字体。
 - 同一面板提供可搜索目录、添加书签、书签跳转、关联书籍日志、阅读日志和专注模式。PDF 与 EPUB 共用浮动控制样式，拖动设置面板的标题栏可移动面板。手机长按翻页控件可拖动，靠近顶边或底边时自动横排。EPUB 手机端可轻点正文两侧或左右滑动翻屏，轻点中间开关设置。
 - 使用 EPUB CFI（定位到书内文字的标识）保存位置。旋转、修改排版和重新打开会回到该文字所在的一屏；屏幕起点可能因重新分页稍有不同。打开和重新排版不会更新同步进度，主动翻屏与章节跳转才会保存。
 - 与 PDF 共用设置中的阅读记录目录、按设备记录、计时规则、分类、图表和手动结算。EPUB 在日志中显示百分比范围，例如 `[EPUB 10.0%–20.0%]`，不把动态屏数当固定页码。关联笔记可引用 EPUB 文件，或在日志卡片中手动选择。
@@ -155,7 +157,7 @@ npm run build
 
 ### Release provenance
 
-Pushing a version tag that matches the manifest runs the GitHub Actions release workflow. The workflow builds, tests, and attests the files before uploading them to the release. To check the provenance of an asset from a release produced by this workflow, run:
+The build generates `styles.css` from `src/pager.css` and the bundled font. Pushing a version tag that matches the manifest runs the GitHub Actions release workflow. The workflow builds, tests, and attests the files before uploading them to the release. To check the provenance of an asset from a release produced by this workflow, run:
 
 ```bash
 gh attestation verify main.js --repo Heptazero/obsidian-PDF-pager

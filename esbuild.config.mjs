@@ -1,5 +1,6 @@
 import esbuild from "esbuild";
 import { readFile, writeFile } from "node:fs/promises";
+import { buildStylesheet } from "./styles-build.mjs";
 import { epubBuild } from "./epub-build.mjs";
 
 const notices = await Promise.all([
@@ -37,3 +38,5 @@ if (forbidden.some((pattern) => pattern.test(bundle.text))) {
   throw new Error("The release bundle contains executable-script support.");
 }
 await writeFile(bundle.path, bundle.contents);
+
+await writeFile("styles.css", await buildStylesheet());

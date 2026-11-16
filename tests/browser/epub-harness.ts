@@ -1,9 +1,10 @@
 import Locations from "epubjs/src/locations.js";
 import { EpubReaderView } from "../../src/epub-view";
 import { StateStore } from "../../src/state-store";
+import { bindPdfTapPaging } from "../../src/pdf-tap-paging";
 import { PagerUi } from "../../src/pager-ui";
 import { ReadingLogView } from "../../src/reading-log-view";
-import { FileView, Platform, fontRequests } from "./obsidian-stub";
+import { FileView, Platform } from "./obsidian-stub";
 
 const storage = new Map<string, unknown>();
 const files = new Map<string, string>();
@@ -23,7 +24,6 @@ const app = {
       write: async (path: string, value: string) => { files.set(path, value); },
       mkdir: async (path: string) => { folders.add(path); },
       readBinary: async (path: string) => fontFiles.get(path),
-      writeBinary: async (path: string, data: ArrayBuffer) => { fontFiles.set(path, data); },
     },
   },
   workspace: {
@@ -43,8 +43,11 @@ view.file = file as never;
 (window as unknown as Record<string, unknown>).notices = [];
 (window as unknown as Record<string, unknown>).harness = {
   view, store, files, storage,
-  fontRequests: () => fontRequests,
-  mobile: () => { Platform.isMobile = true; document.body.classList.add("is-mobile"); },
+  mobile: () => {
+    Platform.isMobile = true;
+    document.body.classList.add("is-mobile");
+    fontFiles.set(".obsidian/plugins/pdf-pager-hz/noto-serif-cjk-sc-2.003.otf", new ArrayBuffer(4));
+  },
   layoutChanged: () => { for (const listener of listeners.get("layout-change") ?? []) listener(); },
   open: () => view.onLoadFile(file as never),
   holdNextIndex: () => {
@@ -61,6 +64,7 @@ view.file = file as never;
 };
 
 Object.assign((window as unknown as { harness: object }).harness, {
+  bindPdfTapPaging,
   async mountPdf() {
     await view.onUnloadFile();
     view.contentEl.remove();

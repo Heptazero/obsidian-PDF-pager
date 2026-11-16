@@ -1,5 +1,5 @@
 import {
-  AbstractInputSuggest, Notice, PluginSettingTab, Setting, normalizePath, type App, type Plugin,
+  AbstractInputSuggest, Notice, Platform, PluginSettingTab, Setting, normalizePath, type App, type Plugin,
 } from "obsidian";
 
 export interface PdfPagerSettings {
@@ -11,6 +11,7 @@ export interface PdfPagerSettings {
   sessionMergeMinutes: number;
   dayEndMinutes: number;
   mobileLogBottomPadding: number;
+  pdfTapPaging: boolean;
 }
 
 export interface PdfPagerSettingsController {
@@ -20,6 +21,7 @@ export interface PdfPagerSettingsController {
   updateSessionMergeMinutes(minutes: number): Promise<void>;
   updateDayEndMinutes(minutes: number): Promise<void>;
   updateMobileLogBottomPadding(pixels: number): Promise<void>;
+  updatePdfTapPaging(enabled: boolean): Promise<void>;
 }
 
 type FolderChoice = { path: string } | { empty: true };
@@ -94,6 +96,25 @@ export class PdfPagerSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const settings = this.controller.getPdfPagerSettings();
     containerEl.empty();
+
+    if (Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("PDF 轻点左右翻页")
+        .setDesc("轻点 PDF 正文区左半边翻上一屏，右半边翻下一屏。默认关闭，方便使用点击查词。")
+        .addToggle((toggle) => {
+          toggle.setValue(settings.pdfTapPaging).onChange(async (enabled) => {
+            toggle.setDisabled(true);
+            try {
+              await this.controller.updatePdfTapPaging(enabled);
+            } catch (error) {
+              toggle.setValue(this.controller.getPdfPagerSettings().pdfTapPaging);
+              new Notice(`无法保存 PDF 翻页设置：${String(error)}`);
+            } finally {
+              toggle.setDisabled(false);
+            }
+          });
+        });
+    }
 
     const folderSetting = new Setting(containerEl)
       .setName("阅读记录目录")

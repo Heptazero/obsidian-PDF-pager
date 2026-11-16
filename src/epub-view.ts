@@ -64,7 +64,7 @@ export class EpubReaderView extends FileView {
   private queuedJump: string | null = null;
   private preferences: EpubPreferences;
   private serifFontUrl: string | null = null;
-  private downloadingSerif = false;
+  private serifFontLoad: Promise<void> | null = null;
   private area!: HTMLElement;
   private rail!: HTMLElement;
   private panel!: HTMLElement;
@@ -132,7 +132,7 @@ export class EpubReaderView extends FileView {
     this.panelBody = this.panel.createDiv();
     this.renderPanel();
     this.applyMargins();
-    if (Platform.isMobile && !this.serifFontUrl) void this.applyChineseSerif(false);
+    if (Platform.isMobile && this.preferences.font === "serif") this.applyChineseSerif();
     if (Platform.isMobile) {
       watchReaderToolbar(lifetime, this.contentEl, this.app.workspace, true);
       for (const event of ["touchstart", "touchmove"] as const) {
@@ -427,13 +427,13 @@ export class EpubReaderView extends FileView {
     contents.css("background-color", style.backgroundColor, true);
     contents.css("font-size", `${this.preferences.fontSize}px`, true);
     contents.css("line-height", String(this.preferences.lineHeight), true);
-    const downloadedSerif = this.preferences.font === "serif" ? this.serifFontUrl : null;
-    const serifFamily = downloadedSerif ? '"Pager HZ Chinese Serif", ' : "";
+    const customSerif = this.preferences.font === "serif" ? this.serifFontUrl : null;
+    const serifFamily = customSerif ? '"Pager HZ Chinese Serif", ' : "";
     const family = this.preferences.font === "serif"
       ? serifFamily + '"Songti SC", "Noto Serif CJK SC", "Noto Serif CJK", "Source Han Serif SC", SimSun, serif'
       : '"PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK", "Microsoft YaHei", sans-serif';
-    void contents.addStylesheetCss(this.preferences.font === "original" ? "/* Original font */" : `${downloadedSerif ? `
-      @font-face { font-family: "Pager HZ Chinese Serif"; src: url("${downloadedSerif}") format("opentype"); }
+    void contents.addStylesheetCss(this.preferences.font === "original" ? "/* Original font */" : `${customSerif ? `
+      @font-face { font-family: "Pager HZ Chinese Serif"; src: url("${customSerif}"); }
     ` : ""}
     @layer pager-font {
       :where(body, body :is(p, div, li, blockquote, span, a, em, strong, b, i, font, dt, dd, td, th, h1, h2, h3, h4, h5, h6)) {
@@ -449,33 +449,22 @@ export class EpubReaderView extends FileView {
       "p": { "margin-block": `${this.preferences.paragraphGap}em !important` },
       "img, svg, video": { "max-width": "100% !important", "object-fit": "contain" },
     }, "pager-layout");
-    if (downloadedSerif) {
+    if (customSerif) {
       return contents.document.fonts.load('20px "Pager HZ Chinese Serif"', "中文宋体")
         .then(() => undefined).catch(() => { /* Keep the system serif fallback. */ });
     }
   }
 
-  private async applyChineseSerif(download: boolean): Promise<void> {
-    if (download) {
-      if (this.downloadingSerif) return;
-      this.downloadingSerif = true;
-      this.renderPanel();
-    }
-    try {
-      const folder = this.plugin.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}`;
-      const bytes = await loadChineseSerif(this.app.vault.adapter, folder, download);
-      if (!bytes || !this.lifetime) return;
-      if (!this.serifFontUrl) this.serifFontUrl = URL.createObjectURL(new Blob([bytes], { type: "font/otf" }));
-      if (download) {
-        this.preferences.font = "serif";
-        this.savePreferences();
-      } else if (this.preferences.font === "serif") this.scheduleLayout();
-    } catch {
-      if (download) new Notice("中文宋体下载失败，请重试");
-    } finally {
-      if (download) this.downloadingSerif = false;
-      if (this.lifetime && (download || this.serifFontUrl)) this.renderPanel();
-    }
+  private applyChineseSerif(): void {
+    if (this.serifFontUrl || this.serifFontLoad) return;
+    const folder = this.plugin.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}`;
+    this.serifFontLoad = loadChineseSerif(this.app.vault.adapter, folder, this.contentEl).then((font) => {
+      if (!font || !this.lifetime) return;
+      this.serifFontUrl = URL.createObjectURL(font);
+      if (this.preferences.font === "serif") this.scheduleLayout();
+    }).catch(() => {
+      // The installed system fonts remain available if the packaged font fails to load.
+    }).finally(() => { this.serifFontLoad = null; });
   }
 
   private scheduleLayout(): void {
@@ -560,21 +549,14 @@ export class EpubReaderView extends FileView {
       });
     }
     const fonts = this.panelBody.createDiv("epub-pager-fonts");
-    for (const [value, label] of [["original", "原字体"], ["serif", this.serifFontUrl ? "中文宋体" : "宋体类"], ["sans-serif", "黑体类"]] as const) {
+    for (const [value, label] of [["original", "原字体"], ["serif", Platform.isMobile ? "宋体" : "宋体类"], ["sans-serif", "黑体类"]] as const) {
       const choice = fonts.createEl("button", { text: label, attr: { "aria-pressed": String(this.preferences.font === value) } });
       choice.addEventListener("click", () => {
         this.preferences.font = value;
+        if (Platform.isMobile && value === "serif") this.applyChineseSerif();
         this.savePreferences();
         this.renderPanel();
       });
-    }
-    if (Platform.isMobile && !this.serifFontUrl) {
-      const download = fonts.createEl("button", {
-        text: this.downloadingSerif ? "正在下载中文宋体…" : "下载中文宋体（约 25 MB）",
-        attr: { type: "button", title: "从 GitHub 下载，下载后可离线使用" },
-      });
-      download.disabled = this.downloadingSerif;
-      download.addEventListener("click", () => void this.applyChineseSerif(true));
     }
   }
 

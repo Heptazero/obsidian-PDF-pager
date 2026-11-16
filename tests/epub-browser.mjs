@@ -6,6 +6,7 @@ import http from "node:http";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import JSZip from "jszip";
+import { buildStylesheet } from "../styles-build.mjs";
 import { epubBuild } from "../epub-build.mjs";
 
 const directory = await mkdtemp(path.join(tmpdir(), "pager-epub-browser-"));
@@ -18,13 +19,11 @@ for (const chapter of ["a", "b"]) zip.file(`${chapter}.xhtml`, `<html xmlns="htt
 const fixture = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 await build({ plugins: [epubBuild], entryPoints: ["tests/browser/epub-harness.ts"], bundle: true, outfile: path.join(directory, "test.js"), platform: "browser", format: "iife", alias: { obsidian: path.resolve("tests/browser/obsidian-stub.ts") } });
 const script = await readFile(path.join(directory, "test.js"));
-const css = await readFile("styles.css");
-const font = process.env.PAGER_TEST_SERIF_FONT ? await readFile(process.env.PAGER_TEST_SERIF_FONT) : null;
+const css = await buildStylesheet();
 const server = http.createServer((request, response) => {
   if (request.url === "/test.js") { response.setHeader("Content-Type", "text/javascript"); response.end(script); }
   else if (request.url === "/styles.css") { response.setHeader("Content-Type", "text/css"); response.end(css); }
   else if (request.url === "/fixture.epub") response.end(fixture);
-  else if (request.url === "/fixture.otf" && font) response.end(font);
   else response.end('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="/styles.css"/><style>:root{--background-primary:#fff;--background-primary-alt:#eee;--text-normal:#222;--background-modifier-border:#ccc;--text-muted:#666}body{margin:0}#host,.view-content{height:100dvh;width:100%;}button{cursor:pointer}</style></head><body><div id="host"></div><script src="/test.js"></script></body></html>');
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -33,6 +32,12 @@ try {
   browser = await chromium.launch({ executablePath: process.env.PAGER_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
   const errors = [];
+  const externalRequests = [];
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (["http:", "https:"].includes(url.protocol) && url.origin !== origin) externalRequests.push(url.href);
+  });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.evaluate(async () => {
@@ -244,46 +249,88 @@ try {
   await page.locator('[aria-label="展开阅读设置"]').click();
   const panel = await page.locator(".epub-pager-panel").boundingBox();
   assert.ok(panel.x >= 0 && panel.y >= 0 && panel.x + panel.width <= 844 && panel.y + panel.height <= 390, "reading controls stay within the landscape viewport");
-  if (font) {
-    await page.getByRole("button", { name: "下载中文宋体（约 25 MB）" }).tap();
-    await page.waitForFunction(() => {
-      const doc = document.querySelector("iframe")?.contentDocument;
-      return doc && [...doc.fonts].some((face) => face.family === "Pager HZ Chinese Serif" && face.status === "loaded");
-    });
-    await page.locator("iframe").evaluate((frame) => {
-      const doc = frame.contentDocument;
-      const probe = doc.createElement("span");
-      probe.id = "chinese-font-probe";
-      probe.textContent = "中文宋体测试";
-      doc.body.append(probe);
-    });
-    await cdp.send("DOM.enable");
-    await cdp.send("CSS.enable");
-    const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
-    function findProbe(node) {
-      if (node.attributes?.includes("chinese-font-probe")) return node.nodeId;
-      for (const child of [...(node.children ?? []), ...(node.contentDocument ? [node.contentDocument] : [])]) {
-        const found = findProbe(child);
-        if (found) return found;
-      }
+  assert.equal(await page.getByRole("button", { name: /下载.*宋体/ }).count(), 0);
+  await page.getByRole("button", { name: "宋体", exact: true }).tap();
+  await page.waitForFunction(() => {
+    const doc = document.querySelector("iframe")?.contentDocument;
+    return doc && !window.harness.view.reformatting && [...doc.fonts].some((face) => face.family === "Pager HZ Chinese Serif" && face.status === "loaded");
+  });
+  await page.locator("iframe").evaluate((frame) => {
+    const doc = frame.contentDocument;
+    const probe = doc.createElement("span");
+    probe.id = "chinese-font-probe";
+    probe.textContent = "中文宋体测试";
+    doc.body.append(probe);
+  });
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument", { depth: -1, pierce: true });
+  function findProbe(node) {
+    if (node.attributes?.includes("chinese-font-probe")) return node.nodeId;
+    for (const child of [...(node.children ?? []), ...(node.contentDocument ? [node.contentDocument] : [])]) {
+      const found = findProbe(child);
+      if (found) return found;
     }
-    const nodeId = findProbe(root);
-    assert.ok(nodeId, "the Chinese-only probe exists in the EPUB frame");
-    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
-    assert.ok(fonts.some((font) => font.isCustomFont && /Noto Serif CJK SC/.test(font.familyName) && font.glyphCount >= 6), JSON.stringify(fonts));
-    await page.evaluate(async () => {
-      await window.harness.view.onClose();
-      await window.harness.open();
-    });
-    await page.waitForFunction(() => window.harness.view.ready && window.harness.view.serifFontUrl);
-    assert.equal(await page.evaluate(() => window.harness.fontRequests()), 1, "reopening restores the Chinese serif font offline");
   }
+  const nodeId = findProbe(root);
+  assert.ok(nodeId, "the Chinese-only probe exists in the EPUB frame");
+  const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+  assert.ok(fonts.some((font) => font.isCustomFont && /Noto Serif CJK SC/.test(font.familyName) && font.glyphCount >= 6), JSON.stringify(fonts));
+  await page.evaluate(async () => {
+    await window.harness.view.onClose();
+    await window.harness.open();
+  });
+  await page.waitForFunction(() => window.harness.view.ready && window.harness.view.serifFontUrl);
+  assert.deepEqual(externalRequests, [], "mobile serif and reopening work without contacting a font server");
   await page.evaluate(async () => {
     await window.harness.view.onUnloadFile();
     await Promise.all([window.harness.open(), window.harness.view.onUnloadFile()]);
   });
   assert.equal(await page.locator("iframe").count(), 0, "a cancelled open cannot resurrect the iframe");
   assert.equal(await page.evaluate(() => window.harness.view.ready), false);
+  const pdfDirections = await page.evaluate(() => {
+    const surface = document.body.createDiv();
+    surface.style.cssText = "position:fixed;inset:0";
+    const text = surface.createSpan({ text: "PDF 正文" });
+    const link = surface.createEl("a", { attr: { href: "#destination" } });
+    let enabled = false;
+    const directions = [];
+    const unbind = window.harness.bindPdfTapPaging(surface, () => enabled, (direction) => directions.push(direction));
+    const finger = (target, x, id = 1) => new Touch({ identifier: id, target, clientX: x, clientY: 100 });
+    const dispatch = (target, type, touches, changedTouches = touches) => {
+      target.dispatchEvent(new TouchEvent(type, { bubbles: true, touches, changedTouches }));
+    };
+    const tap = (target, x) => {
+      const touch = finger(target, x);
+      dispatch(target, "touchstart", [touch]);
+      dispatch(target, "touchend", [], [touch]);
+    };
+    tap(text, 100);
+    enabled = true;
+    tap(text, 100);
+    tap(text, 600);
+    tap(text, 10);
+    tap(link, 100);
+    const touch = finger(text, 100);
+    dispatch(text, "touchstart", [touch]);
+    dispatch(text, "touchmove", [finger(text, 150)]);
+    dispatch(text, "touchend", [], [touch]);
+    dispatch(text, "touchstart", [touch]);
+    dispatch(text, "touchstart", [touch, finger(text, 150, 2)]);
+    dispatch(text, "touchend", [], [touch]);
+    dispatch(text, "touchstart", [touch]);
+    dispatch(text, "touchcancel", [], [touch]);
+    dispatch(text, "touchend", [], [touch]);
+    const selection = getSelection();
+    selection.selectAllChildren(text);
+    tap(text, 100);
+    selection.removeAllRanges();
+    unbind();
+    tap(text, 600);
+    surface.remove();
+    return directions;
+  });
+  assert.deepEqual(pdfDirections, [-1, 1], "PDF tap paging respects the setting, gesture edges, links, pans, pinches, cancellations, selection, and teardown");
   await page.evaluate(() => window.harness.mountPdf());
   await page.locator(".pager-reader-status").tap();
   await page.getByRole("button", { name: "调整页面宽度" }).tap();

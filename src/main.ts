@@ -19,6 +19,7 @@ import { centeredScrollLeft, relativeZoom, scaleForNewFloor } from "./zoom";
 import { clampPosition, scrollTopForPosition, sliceCount, sliceIndexAtOffset, sliceOffset, slicePosition } from "./slices";
 import { EPUB_VIEW, EpubReaderView, chooseEpub } from "./epub-view";
 import { ensureEpubRegistration } from "./epub-registration";
+import { bindPdfTapPaging } from "./pdf-tap-paging";
 
 const SETTINGS_KEY = "pdf-pager-hz:display";
 const READING_TICK_MS = 15_000;
@@ -90,6 +91,7 @@ class PagerSession implements PagerActions {
   private readingLastSave = 0;
   private userInteractedWhileRestoring = false;
   private focusMode = false;
+  private unbindTapPaging: (() => void) | null = null;
 
   private readonly onPagesInit = () => window.setTimeout(() => this.refreshFile(), 0);
   private readonly onPageChanging = (event: { pageNumber?: number }) => {
@@ -176,12 +178,21 @@ class PagerSession implements PagerActions {
     if (this.attachTimer !== null) window.clearTimeout(this.attachTimer);
     this.attachTimer = null;
     if (this.native !== native) {
+      this.unbindTapPaging?.();
       this.native?.pdfViewer.container.removeEventListener("scroll", this.onContainerScroll);
       this.native?.eventBus.off("pagesinit", this.onPagesInit);
       this.native?.eventBus.off("pagechanging", this.onPageChanging);
       this.native?.eventBus.off("scalechanging", this.onScaleChanging);
       this.native = native;
-      native.pdfViewer.container.addEventListener("scroll", this.onContainerScroll, { passive: true });
+      const container = native.pdfViewer.container;
+      container.addEventListener("scroll", this.onContainerScroll, { passive: true });
+      if (Platform.isMobile) {
+        this.unbindTapPaging = bindPdfTapPaging(
+          container,
+          () => this.armed && this.view.file?.path === this.path && this.plugin.getPdfPagerSettings().pdfTapPaging,
+          (direction) => { if (direction < 0) this.previous(); else this.next(); },
+        );
+      }
       native.eventBus.on("pagesinit", this.onPagesInit);
       native.eventBus.on("pagechanging", this.onPageChanging);
       native.eventBus.on("scalechanging", this.onScaleChanging);
@@ -693,6 +704,7 @@ class PagerSession implements PagerActions {
     this.clearTimers();
     if (this.attachTimer !== null) window.clearTimeout(this.attachTimer);
     this.resizeObserver?.disconnect();
+    this.unbindTapPaging?.();
     this.native?.eventBus.off("pagesinit", this.onPagesInit);
     this.native?.eventBus.off("pagechanging", this.onPageChanging);
     this.native?.eventBus.off("scalechanging", this.onScaleChanging);
@@ -737,6 +749,7 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
       sessionMergeMinutes,
       dayEndMinutes,
       mobileLogBottomPadding,
+      pdfTapPaging: saved.pdfTapPaging === true,
     };
     this.store = new StateStore(this.app, recordFolder);
     await this.store.migrateReadableFileNames();
@@ -1002,6 +1015,17 @@ export default class PdfPagerPlugin extends Plugin implements PdfPagerSettingsCo
     await this.saveData(this.data);
     this.syncReadingFocus();
     this.refreshReadingLog();
+  }
+
+  async updatePdfTapPaging(enabled: boolean): Promise<void> {
+    const previous = this.data.pdfTapPaging;
+    this.data.pdfTapPaging = enabled;
+    try {
+      await this.saveData(this.data);
+    } catch (error) {
+      if (this.data.pdfTapPaging === enabled) this.data.pdfTapPaging = previous;
+      throw error;
+    }
   }
 
   async updateMobileLogBottomPadding(pixels: number): Promise<void> {
